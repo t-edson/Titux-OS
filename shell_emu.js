@@ -71,14 +71,16 @@ function TitoShellEmul(response) {
             curCommand = '';
             curXpos = 0;
         } else if (modeShell==SM_COMMAND) {
-            if (curCommand=='date') {
+            let parts = curCommand.split(' ');
+            if (parts[0]=='') {
+            } else if (parts[0]=='date') {
                 let cur_date = new Date().toGMTString(); 
                 response(cur_date + "\n")
-            } else if (curCommand=='pwd') {
+            } else if (parts[0]=='pwd') {
                 response(cur_path + "\n")
-            } else if (curCommand=='ls') {
+            } else if (parts[0]=='ls') {
                 //response(cur_path + "\n")
-                do_ls();
+                do_ls(parts);
             } else{
                 response(curCommand + ": Command not found\n")
             }
@@ -130,27 +132,15 @@ function TitoShellEmul(response) {
             shell.writeCode(keyCode);
         }
     }
-    function do_ls() {
+    function do_ls(parts) {
         /**Hace un listado del directorio actual */
-        if (cur_path=="/") {
-            let cur_dir = filesystem;
-            //Lista el directorio "cur_dir"
-            let claves = Object.keys(cur_dir);  //Para poder iterar sobre los archivos
-            if (claves.length==0) return;   //No hay archivos
-            let maxlen = 0;    //Tamaño máximo de los nombres de lo archivos
-            let totlen = 0;    //Tamaño total del nombre de los archivos 
-            for (let f_name in cur_dir) {   //Calcula el tamaño máximo de los nombres
-                totlen += f_name.length + 2;
-                if (f_name.length>maxlen) maxlen = f_name.length;
-            }
-            maxlen += 2;    //Aumenta dos caracteres para dejar espacio
-            totlen -= 2;    //Corrige quitando espacio al último
+        function list_columns(fnames, maxlen, totlen) {
             let ncols = Math.floor(80/maxlen);  //Calcula número de columnas para el listado
-            let nlins = Math.ceil(claves.length/ncols);  //Filas por columna
-            if (ncols>=claves.length || totlen<=80) {    //Se puede listar en una sola fila
-                for (let f_name in cur_dir) {
-                    response(f_name + "  ");
-                }            
+            let nlins = Math.ceil(fnames.length/ncols);  //Filas por columna
+            if (ncols>=fnames.length || totlen<=80) {    //Se puede listar en una sola fila
+                for (let i = 0; i < fnames.length; i++) {
+                    response(fnames[i] + "  ");
+                }
                 response("\n")
             } else {    //Se debe listar en varias filas
                 //response("ncols=" + ncols + "\n");
@@ -161,8 +151,8 @@ function TitoShellEmul(response) {
                     //Escribe por columnas
                     for (let col = 0; col < ncols; col++) {
                         let i = col*nlins+fil;
-                        if (i<claves.length) {
-                            let f_name = claves[i].padEnd(maxlen);
+                        if (i<fnames.length) {
+                            let f_name = fnames[i].padEnd(maxlen);
                             response(f_name);
                         }
                     }
@@ -170,21 +160,61 @@ function TitoShellEmul(response) {
                 }
             }
         }
+        function list_details(cur_dir) {
+//                for (let i = 0; i < cur_dir.length; i++) {
+//                    response(cur_dir[i] + "\n");
+//                }
+                for (let key in cur_dir) {
+                    let fdat = cur_dir[key];
+                    response(fdat[0] + " " + 
+                        String(fdat[1]).padStart(3) + " "  +  //Permisos
+                        fdat[2].padEnd(8) + " " +       //Usuario
+                        fdat[3].padEnd(8) + " " +       //Grupo
+                        String(fdat[4]).padStart(6) + " " +   //Tamaño
+                        key +  "\n");
+                }                
+        }
+        if (cur_path=="/") {
+            let cur_dir = filesystem;
+            //Lista el directorio "cur_dir"
+            let fnames = Object.keys(cur_dir);  //Para poder iterar sobre los archivos
+            if (fnames.length==0) return;   //No hay archivos
+            let maxlen = 0;    //Tamaño máximo de los nombres de lo archivos
+            let totlen = 0;    //Tamaño total del nombre de los archivos 
+            for (let f_name in cur_dir) {   //Calcula el tamaño máximo de los nombres
+                totlen += f_name.length + 2;
+                if (f_name.length>maxlen) maxlen = f_name.length;
+            }
+            maxlen += 2;    //Aumenta dos caracteres para dejar espacio
+            totlen -= 2;    //Corrige quitando espacio al último
+            list_columns(fnames, maxlen, totlen);
+            //list_details(cur_dir);
+        }
     }
     function init_filesystem() {
         //filesystem = new Array(NROWS);  
         //for(var i=0; i<screen.length; i++) {
         //    screen[i] = new Array(NCOLS);
         //}
-        filesystem["bin"]  = ['lrwxrwxrwx', "Hola mundo"];  //"Hola mundo";
-        filesystem["dev"]  = ['lrwxrwxrwx', "Hola mundo"];  //"Hola mundo";
-        filesystem["lib"]  = ['lrwxrwxrwx', "Hola mundo"];  //"Hola mundo";
-        filesystem["usr123456789012"]  = ['lrwxrwxrwx', "Hola mundo"];  //"Hola mundo";
-        filesystem["camino"]  = ['lrwxrwxrwx', "Hola mundo"];  //"Hola mundo";
-        filesystem["camino123"]  = ['lrwxrwxrwx', "Hola mundo"];  //"Hola mundo";
-        filesystem["nombre_algo_largo"]  = ['lrwxrwxrwx', "Hola mundo"];  //"Hola mundo";
-        filesystem["root"] = ['lrwxrwxrwx', "Hola mundo"];  //"Hola mundo";
-        filesystem["_hola"] = ['lrwxrwxrwx', "Hola mundo"];  //"Hola mundo";
+        /* Una carpeta de archivos es una lista con el nombre del archivo como clave.
+        Los archivos se definen como una lista con los siguientes campos:
+                - Permisos del archico,
+                - Número de enlaces
+                - Propietario del archivo
+                - Grupo al que pertenece
+                - Tamaño del archivo en bytes
+                - Fecha y hora de la última modificación
+                - Contenido del archivo, si se un archivo
+        */
+        filesystem["bin"]               = ['drwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2023/10/27"), null];
+        filesystem["dev"]               = ['drwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2023/10/27"), null];  
+        filesystem["lib"]               = ['drwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2023/10/27"), null];  
+        filesystem["usr123456789012"]   = ['lrwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2023/10/27"), "Hola mundo"];  
+        filesystem["camino"]            = ['lrwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2023/10/27"), "Hola mundo"];  
+        filesystem["camino123"]         = ['lrwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2023/10/27"), "Hola mundo"];  
+        filesystem["nombre_algo_largo"] = ['lrwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2023/10/27"), "Hola mundo"];  
+        filesystem["root"]              = ['lrwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2023/10/27"), "Hola mundo"];  
+        filesystem["_hola"]             = ['lrwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2023/10/27"), "Hola mundo"];  
         cur_path = "/";
     }
     function init() {
