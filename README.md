@@ -25,7 +25,9 @@ This library is made up of 3 files:
 * titoterm.js
 * shell_emu.js
 
-All three should be included on the website. The first two implement the terminal with support for ANSI sequences. These files have been copied from the project 
+All three should be included in the webpage. 
 
-The shell emulator, he completed, is in the shell_emu.js file.
+The first two implement the terminal with support for ANSI sequences. These files have been copied from the project https://github.com/t-edson/titoterm.js
+
+The complete shell emulator is in the "shell_emu.js" file.
 
