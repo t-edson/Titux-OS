@@ -11,8 +11,10 @@ function TitoShellEmul(response) {
     let log_user  = '';     //Usuario actual
     let log_pass  = '';
     let log_group = '';     //Grupo actual
-    let cur_path  = '';     //Directorio actual
-    let filesystem = [];    //Arreglo para el sistema de archivos
+    let cur_path  = '';     //Ruta del directorio actual
+    let cur_dir = [];       //Directorio actual
+    
+    let fsystem_dir = [];   //Directorio raiz del sistema de archivos
     let err = "";           //Mensaje de error
     //Modos de trabajo del Shell
     const SM_LOGIN = 0;     //Modo esperando usuario
@@ -74,20 +76,24 @@ function TitoShellEmul(response) {
             curCommand = '';
             curXpos = 0;
         } else if (modeShell==SM_COMMAND) {
+            err = "";
             let parts = curCommand.split(/\s+/);
             let command = parts[0];
             if (command =='') {
             } else if (command=='date') {
                 let cur_date = new Date().toGMTString(); 
-                response(cur_date + "\n")
+                response(cur_date + "\n");
             } else if (command=='pwd') {
-                response(cur_path + "\n")
+                if (cur_path=='') response("/\n"); 
+                else response(cur_path + "\n");
             } else if (command=='ls') {
-                //response(cur_path + "\n")
                 do_ls(parts);
+            } else if (command=='cd') {
+                do_cd(parts);
             } else{
-                response(curCommand + ": Command not found\n")
+                err = "Command not found";
             }
+            if (err!="") response(curCommand + ": " + err + "\n");
             curCommand = '';
             curXpos = 0;
             response(prompt);
@@ -159,6 +165,43 @@ function TitoShellEmul(response) {
         }
         return flist;
     }
+    function expand_rel_path(basepath, rel_path) {
+        /* Expande la ruta relativa "rel_path" y devuelve una ruta absoluta. 
+        "basepath" no debe incluir el caracter "/" al final */
+        if (rel_path[0]=='/') { //Es absoluta
+            return rel_path;
+        } else {
+            return basepath + "/" + rel_path;
+        }
+    }
+    function do_cd(parts) {
+        /*Accede al directorio indicado */
+        let path = parts[1]; 
+        if (path=='/') {
+            cur_path = '';
+            cur_dir = fsystem_dir;
+            return;
+        }
+        let new_path = expand_rel_path(cur_path, path);
+        let dirs = new_path.split('/');
+        //Verifica si existe la ruta absoluta
+        let next_dir = fsystem_dir;
+        for (let i = 1; i < dirs.length; i++) {
+            if (dirs[i] in next_dir) {
+                next_dir = next_dir[dirs[i]][6];   //Toma la lista del directorio
+                if (typeof next_dir === 'string') {  //Es un archivo
+                    err = dirs[i] + ": Not a directory";
+                    return;
+                }
+            } else {
+                err = 'No such file or directory';
+                return;
+            }
+        }
+        //Existe. Actualiza cur_path.
+        cur_path = new_path;
+        cur_dir = next_dir;
+    }
     function do_ls(parts) {
         /**Hace un listado del directorio actual */
         function list_columns(fnames, maxlen, totlen) {
@@ -187,11 +230,11 @@ function TitoShellEmul(response) {
                 }
             }
         }
-        function list_details(cur_dir) {
+        function list_details(the_dir) {
                 const opc = { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false };
                 const fecActual = new Date();
-                for (let key in cur_dir) {
-                    let fdat = cur_dir[key];
+                for (let key in the_dir) {
+                    let fdat = the_dir[key];
                     //Da formato a fecha
                     let fmod = fdat[5];
                     const fecFormat = fmod.toLocaleString('en-US', opc);   //"Mar 07, 2023, 03:22"
@@ -211,7 +254,7 @@ function TitoShellEmul(response) {
                         key +  "\n");
                 }                
         }
-        let cur_dir;
+        let match_dir = [];  //Directorio de archivos que cumplen
         //Busca si hay nombre de archivo
         let fname = '';
         for (let i = 1; i < parts.length; i++) {
@@ -220,45 +263,51 @@ function TitoShellEmul(response) {
         }
         //Filtra lista de archivos por nombre
         if (fname=='') {
-            cur_dir = do_getdir(cur_path);  //Todo el directorio
+            if (parts.includes('-a')) {  //Sin filtro
+                match_dir = cur_dir;  
+            } else {  //Filtrando archivos ocultos
+                for (const fname in cur_dir) {
+                    if (fname[0]!=".") match_dir[fname] = cur_dir[fname];
+                }
+            }
         } else {
             //Hay que buscar los que cumplan
             /*Por simplicidad, aquí asumimos que "fname" no contiene información del
             directorio, sino tan solo el nombre. */
-            let fdir = do_getdir(cur_path);  //Directorio actual
-            cur_dir = expandFiles(fname, fdir);   //Archivos que cumplen
+            match_dir = expandFiles(fname, cur_dir);   //Archivos que cumplen
         }
-        //Lista el directorio "cur_dir"
+        //Lista el directorio "match_dir"
         let maxlen = 0;    //Tamaño máximo de los nombres de los archivos
         let totlen = 0;    //Tamaño total del nombre de los archivos 
-        for (let f_name in cur_dir) {   //Calcula el tamaño máximo de los nombres
+        for (let f_name in match_dir) {   //Calcula el tamaño máximo de los nombres
             totlen += f_name.length + 2;
             if (f_name.length>maxlen) maxlen = f_name.length;
         }
         maxlen += 2;        //Aumenta dos caracteres para dejar espacio
         totlen -= 2;        //Corrige quitando espacio al último
-        let fnames = Object.keys(cur_dir);  //Para poder iterar sobre los archivos
+        let fnames = Object.keys(match_dir);  //Para poder iterar sobre los archivos
         if (fnames.length==0) return;   //No hay archivos
-        if (parts.includes('-l')) list_details(cur_dir); 
+        if (parts.includes('-l')) list_details(match_dir); 
         else list_columns(fnames, maxlen, totlen);
     }
     function do_getdir(path) {
         /* Devuelve el directorio "path" en una lista o diccionario. */
         if (path=="/") {    //Directorio raiz
-            return filesystem;
+            return fsystem_dir;
         } else { //Hay que buscar el directorio
-            let cur_dir = {};
+            let next_dir = {};
             if (path[0] == '/') {   //Ruta absoluta
-                let parts = path.split('/');
-                cur_dir = filesystem;   //DIrectorio inicial
-                for (let i = 0; i < parts.length; i++) {
-                    if (parts[i] in cur_dir) {
-                        cur_dir = cur_dir[6];  //Toma la lista de directorio
+                let dirs = path.split('/');
+                next_dir = fsystem_dir;   //DIrectorio inicial
+                for (let i = 0; i < dirs.length; i++) {
+                    if (dirs[i] in next_dir) {
+                        next_dir = next_dir[6];  //Toma la lista de directorio
                     } else {
                         err = 'No such file or directory';
-                        return cur_dir;
+                        return next_dir;
                     }
                 }
+                return next_dir;
             } else {    //Ruta relativa
                 err = 'Invalid path';
                 ////// Completar
@@ -266,10 +315,16 @@ function TitoShellEmul(response) {
         }
     }
     function do_mkdir(dir_name) {
-        /* Crea un nuevo directorio en la carpeta actual.*/
-        let cur_dir = do_getdir(cur_path);
-    }
-    function init_filesystem() {
+        /* Crea un nuevo directorio, en el directorio actual.*/
+        //Verifica si existe ya el nombre.
+        if (dir_name in cur_dir) {
+            err = "Cannot create directory '" + dir_name + "': File exists";
+            return;
+        }
+        //Creamos el nuevo  directorio
+        let new_dir = [];
+        //Creamos la entrada del directorio
+        cur_dir[dir_name] = ['drwxr-xr-x', 1, log_user, log_group, 4096, new Date(), new_dir];
         /* Una carpeta de archivos es una lista con el nombre del archivo como clave.
         Los archivos se definen como una lista con los siguientes campos:
             - Permisos del archico,
@@ -280,25 +335,41 @@ function TitoShellEmul(response) {
             - Fecha y hora de la última modificación
             - Contenido del archivo, si es un archivo, o lista de archivos si es una carpeta.
         */
+        //Crea los directorios del sistema
+        new_dir['.']  = ['drwxr-xr-x', 1, log_user, log_group, 4096, new Date(), new_dir];
+        new_dir['..'] = ['drwxr-xr-x', 1, log_user, log_group, 4096, new Date(), null];  //Formalmente deberían tener el usuario y grupo del directorio padre
+    }
+    function init_filesystem() {
         //filesystem = new Array(NROWS);  
-        filesystem["bin"]               = ['drwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2023/03/07 03:22:00"), null];
-        filesystem["dev"]               = ['drwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2023/10/20 01:50:00"), null];  
-        filesystem["lib"]               = ['drwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/10/03 04:01:00"), null];  
-        filesystem["usr123456789012"]   = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/01/28 01:20:00"), "Hola mundo"];  
-        filesystem["camino.xml"]        = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/01/27 05:00:00"), "Hola mundo"];  
-        filesystem["programa"]          = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/01/15 01:00:00"), "Hola mundo"];  
-        filesystem["nombre_algo_largo"] = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/10/13 01:30:00"), "Hola mundo"];  
-        filesystem["root"]              = ['drwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/04/27 01:20:00"), null];  
-        filesystem["prueba.txt"]        = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/10/27 01:05:00"), "Hola mundo"];  
-        cur_path = "/";
+        //Inicia creación de directorios
+        log_user = 'root';
+        log_group = 'root';
+        cur_path = "";  //Directorio raiz
+        cur_dir = fsystem_dir;
+        do_mkdir(".");
+        do_mkdir("..");
+        do_mkdir("bin");
+        do_mkdir("dev");  
+        do_mkdir("lib");  
+        do_mkdir('home');
+        fsystem_dir["usr123456789012"]   = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/01/28 01:20:00"), "Hola mundo"];  
+        fsystem_dir["camino.xml"]        = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/01/27 05:00:00"), "Hola mundo"];  
+        fsystem_dir["programa"]          = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/01/15 01:00:00"), "Hola mundo"];  
+        fsystem_dir["nombre_algo_largo"] = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/10/13 01:30:00"), "Hola mundo"];  
+        do_mkdir('root');
+        fsystem_dir["prueba.txt"]        = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/10/27 01:05:00"), "Hola mundo"];  
     }
     function init() {
         /* Inicializa el emulador del Sistema Operativo e inicia el modo de inicio de
          sesión */
         curCommand = "";
         curXpos = 0;
-        group_list['grupo'] = 'grupo';  //Crea un grupo
-        user_list['root'] = ['root', 'grupo'];     //Crea al usuario root
+        //Cre grupos
+        group_list['root'] = 'root';  //Crea un grupo
+        group_list['user'] = 'user';  //Crea un grupo
+        //Crea usuarios
+        user_list['root'] = ['root', 'root'];     //[clave, grupo]
+        user_list['user'] = ['user', 'user'];     //[clave, grupo]
         //Mensaje de saludo
         response("\n");
         response("Titux OS System. Javascript Linux Emulator.\n");
@@ -328,10 +399,10 @@ function TitoShellEmul(response) {
 //
         //////////////////////////////////////////////////////////
         init_filesystem();
-        modeShell = SM_LOGIN;   //Modo de inicio de sesión
-//        modeShell = SM_COMMAND;   //Modo de comandos
-//        log_user = 'root';
-//        log_group = 'grupo';
+//        modeShell = SM_LOGIN;   //Modo de inicio de sesión
+        modeShell = SM_COMMAND;   //Modo de comandos
+        log_user = 'root';
+        log_group = 'root';
 
         response("\x1B[0m");    //Restaura atributos
         response('Login: ');
