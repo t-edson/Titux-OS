@@ -186,13 +186,28 @@ function TitoShellEmul(response) {
         let dirs = new_path.split('/');
         //Verifica si existe la ruta absoluta
         let next_dir = fsystem_dir;
+        let last_dir = null;
+        new_path = '';  //Para construir la ruta (que no siempre será igual a "path", como cuando contiene a los directorios '.' o '..').
         for (let i = 1; i < dirs.length; i++) {
-            if (dirs[i] in next_dir) {
-                next_dir = next_dir[dirs[i]][6];   //Toma la lista del directorio
+            let dirname = dirs[i];
+            if (dirname == '.') {
+                continue;
+            } else if (dirname == '..') {  //Directorio padre
+                if (new_path=='') continue;    //Ya estamos en la raiz
+                else {
+                    next_dir = last_dir;
+                    let p = new_path.split('/');
+                    p.pop();
+                    new_path = p.join('/');
+                }
+            } else if (dirname in next_dir) {
+                last_dir = next_dir;
+                next_dir = next_dir[dirname][6];   //Toma la lista del directorio
                 if (typeof next_dir === 'string') {  //Es un archivo
-                    err = dirs[i] + ": Not a directory";
+                    err = dirname + ": Not a directory";
                     return;
                 }
+                new_path += '/'+dirname;
             } else {
                 err = 'No such file or directory';
                 return;
