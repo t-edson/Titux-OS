@@ -1,6 +1,33 @@
 /* Librería en Javascript para emular el comportamiento de una Shell de Linux*/
 "use strict";
-
+/* Clase que define a un archivo o carpeta. Todos los archivos o carpetas se representan
+como uno de estos objetos. Las carpetas usan el contenedor "this.dir" como un diccionario
+de objetos Cfile. */
+class Cfile {
+    perm  = '-rwxrwxrwx';
+    links = 1;
+    constructor(name, perm, owner, group, size, parent) {
+        this.name   = name;         //Nombre del archivo
+        this.perm   = perm;         //Permisos del archico
+        this.links  = 1;            //Número de enlaces
+        this.owner  = owner;        //Propietario del archivo
+        this.group  = group;        //Grupo al que pertenece
+        this.size   = size;         //Tamaño del archivo en bytes
+        this.mdate  = new Date();   //Fecha y hora de la última modificación
+        this.content= '';           //Contenido del archivo, cuando es un archivo
+        this.dir    = [];           //Lista de archivos cuando es una carpeta
+        this.parent = parent;       //Directorio padre (objeto Cfile)
+    }
+    isFile() {
+        return (this.perm[0] == '-');
+    }
+    isDir() {
+        return (this.perm[0] == 'd');
+    }
+    isRoot() {
+        return (this.parent == null);
+    }
+}
 function TitoShellEmul(response) {
     let curCommand = "";    //Comando actual
     let curXpos = 0;        //Posición actual del cursor con respecto al comando actual
@@ -11,11 +38,12 @@ function TitoShellEmul(response) {
     let log_user  = '';     //Usuario actual
     let log_pass  = '';
     let log_group = '';     //Grupo actual
+    //SIstema de archivos
+    let root_dir = null;    //Directorio raiz
     let cur_path  = '';     //Ruta del directorio actual
-    let cur_dir = [];       //Directorio actual
+    let cur_dir = null;     //Directorio actual
     
-    let fsystem_dir = [];   //Directorio raiz del sistema de archivos
-    let err = "";           //Mensaje de error
+    let err = '';           //Mensaje de error
     //Modos de trabajo del Shell
     const SM_LOGIN = 0;     //Modo esperando usuario
     const SM_PASSW = 1;     //Modo esperando contraseña
@@ -24,6 +52,478 @@ function TitoShellEmul(response) {
     let escape_mode = 0;        //Bandera para el modo escape: 
                                 //  0->Normal; 1->Escape mode
     let ansi = new CAnsiEscape(executeSeq); //Lexer para secuencias ANSI.
+    //Manejo de errores
+    function clearStderr() {
+        //Limpia los errores
+        err = '';
+    }
+    function addError(msg) {
+        //Agrega un error al "stderror".
+        if (err=='') err = msg; 
+        else err += "\n" + err;
+    }
+    function sendStderror(command) {
+        //Muestra el mensaje por el terminal
+        response(command + ": " + err + "\n");        
+    }
+    //Funciones de archivo
+    function expandFileNameIn(file_arr, fname, cur_list, hides) {
+        /* Expande un nombre de archivo (o carpeta) con comodines (cadena "fname"), y
+        agrega al arreglo "file_arr". Si el nombre de archivo "fname" incluye comodines,
+        expande la lista de acuerdo a los archivos que existan en la lista "cur_list" 
+        ( que representa al directorio actual).
+        La bandera "hides" indica si se deben incluir archivos ocultos.
+        No se validan que todos los nombres devueltos existan como archivos o carpetas de
+        "cur_list". */
+        if (fname=='*') {   //Todos los archivos de "cur_list"
+            if (hides) {    //Incluye todos
+                file_arr.push(...Object.keys(cur_list));  //Agrega todos
+            } else {        //No ocultos
+                for (const clave in cur_list) {
+                    if (clave[0]!='.') file_arr.push(clave);
+                }            
+            }
+        } else if (/[\*\?]/.test(fname)) { //Contiene caracteres comodín
+            //Hay que expandir.
+            //Crea una expresión regular equivalente a los comodines
+            const regex = new RegExp('^'+fname.replace(/\?/g, '.').replace(/\*/g, '.*')+'$'); 
+            //Soporte a comodines *, ? y []
+            //const escapa = (caracter) => `\\${caracter}`;
+            //const regex =new RegExp('^' + patron
+            //    .replace(/([.?*+^$[\]\\(){}|-])/g, escapa) // Escapa caracteres especiales de regex
+            //    .replace(/\?/g, '.')                     // ? se convierte en cualquier carácter
+            //    .replace(/\*/g, '.*')                    // * se convierte en cero o más caracteres
+            //    .replace(/\[([^\]]+)\]/g, '[$1]')        // Soporta los corchetes
+            //    + '$')
+            for (const clave in cur_list) {
+                if (!hides && clave[0]=='.') continue;
+                if (regex.test(clave)) {    //Verificar si la clave coincide con el patrón
+                    file_arr.push(clave);      //Agrega al arreglo
+                }
+            }            
+        } else {    //No contiene caracteres comodín
+            file_arr.push(fname); //Solo lo agrega al arreglo
+        }
+    }
+    function expand_rel_path(basepath, rel_path) {
+        /* Expande la ruta relativa "rel_path" y devuelve una ruta absoluta. 
+        "basepath" no debe incluir el caracter "/" al final */
+        if (rel_path[0]=='/') { //Es absoluta
+            return rel_path;
+        } else {
+            return basepath + "/" + rel_path;
+        }
+    }
+    function get_path(obj_fil) {
+        /* Devuelve la ruta al archivo o la carpeta. El parámetro "obj_file" debe ser un
+        objeto "Cfile" que represente a un archivo o carpeta. */
+        let path = '';
+        while (obj_fil.parent!=null) {
+            path = '/' + obj_fil.name + path;
+            obj_fil = obj_fil.parent;
+        }
+        return path;
+    }
+    function get_file(path) {
+        /* Devuelve un objeto Cfile a partir de la cadena "path". El objeto devuelto 
+        puede ser un archivo o directorio. Si no puede ubicar al archivo destino, 
+        devuelve NULL y genera error en "stderror".*/
+        if (path=='/') {
+            cur_path = '';
+            cur_dir = root_dir;
+            return;
+        }
+        let new_path = expand_rel_path(cur_path, path);
+        let dirs = new_path.split('/');
+        //Verifica si existe la ruta absoluta
+        let next_dir = root_dir;
+        for (let i = 1; i < dirs.length; i++) {
+            if (next_dir.isFile()) {  //Es un archivo. No podemos seguir avanzando.
+                addError(next_dir.name + ": Not a directory");
+                return null;
+            }
+            let dirname = dirs[i];
+            if (dirname == '') {    //Puede ser el último directorio o uno vacío
+                continue;
+            } else if (dirname == '.') {
+                continue;
+            } else if (dirname == '..') {  //Directorio padre
+                if (next_dir.parent!=null) {
+                    next_dir = next_dir.parent;
+                }
+            } else if (dirname in next_dir.dir) {
+                next_dir = next_dir.dir[dirname];    //Nuevo directorio
+            } else {
+                addError(dirname + ': No such file or directory');
+                return null;
+            }
+        }
+        return next_dir;
+    }
+    function validate_params(pars, fnames, perms) {
+        /* Valida que los parámetros ingresados, en el arreglo "pars", estén en la lista
+        de parámetros permitidos "perms" y extrae los nombres que no son parámetros en 
+        "fnames". Si no se reconoce un parámetro, se genera un error.
+        Los parámetros se reconocen porque empiezan con "-"
+        */
+        for (let i = 1; i < pars.length; i++) { //No considera nombre del comando
+            let par = pars[i];  //Parámetro
+            if (par[0]=='-') {
+                par = par.slice(1);   //quita "-"
+                if (perms.includes(par)) {
+                    //verb = true; OK
+                } else {
+                    addError("invalid option -- '" + par + "'");
+                    return;
+                }
+            } else {
+                fnames.push(par);  //Agrega nombre
+            }
+       }
+    }
+    function mkdir(base_dir, dir_name) {
+        /* Crea un nuevo directorio, en el directorio indicado (base_fil). Devuelve la 
+        referencia al directorio creado. */
+        //Verifica si existe ya el nombre.
+        if (dir_name in base_dir.dir) {
+            addError("Cannot create directory '" + dir_name + "': File exists");
+            return;
+        }
+        //Creamos el nuevo directorio
+        let new_dir = new Cfile(dir_name, 'drwxr-xr-x', log_user, log_group, 4096, base_dir);
+        //Creamos la entrada del directorio
+        base_dir.dir[dir_name] = new_dir;
+        //Crea los directorios del sistema
+        new_dir.dir['.']  =  new Cfile('.', 'drwxr-xr-x', log_user, log_group, 4096, new_dir);
+        new_dir.dir['..'] =  new Cfile('..','drwxr-xr-x', base_dir.owner, base_dir.group, 4096, new_dir);
+        //Actualiza diccionario de directorios
+        new_dir.dir['.'].dir  = new_dir.dir;
+        new_dir.dir['..'].dir = base_dir.dir;
+        return new_dir;
+    }
+    function mkfile(base_dir, fil_name, mdate, content) {
+        /* Crea un nuevo directorio, en el directorio indicado (base_fil). Devuelve la 
+        referencia al archivo creado. */
+        //Verifica si existe ya el nombre.
+        if (fil_name in base_dir.dir) {
+            addError("Cannot create file '" + fil_name + "': File exists");
+            return;
+        }
+        //Creamos el nuevo archivo
+        let new_fil = new Cfile(fil_name, '-rwxr-xr-x', log_user, log_group, content.length, base_dir);
+        new_fil.mdate = mdate;
+        new_fil.content = content;
+        //Creamos la entrada del directorio
+        base_dir.dir[fil_name] = new_fil;
+        return new_fil;
+    }
+    function do_cd(pars) {
+        /*Accede al directorio indicado */
+        if (pars.length==1) return;  //Sin parámetros
+        let path = pars[1]; 
+        let new_dir = get_file(path);
+        if (err != '') return;
+        if (new_dir.isFile()) {  //Terminó en un archivo
+            addError(new_dir.name + ": Not a directory");
+            return;
+        }
+        //Existe. Actualiza cur_path.
+        cur_dir = new_dir;
+        cur_path = get_path(cur_dir);
+    }
+    function do_echo(pars) {
+        if (pars.length == 1) return;   //Sin parámetros
+        let args = Array.from(pars);    //Copia antes de modificar
+        args.shift();     //Deja solo parámetros
+        //Busca parametros solo al inicio, como parece trabajar "echo".
+        let nextln = true;
+        while (args.length>0 && (args[0]=='-n' /*|| ... */)) {
+            if (args[0]=='-n') nextln = false;
+            args.shift();
+        }
+        //Imprime parámetros
+        if (nextln) response(args.join(' ') + "\n");
+        else response(args.join(' '));
+    }
+    function do_mkdir(pars) {
+        /* Crea un directorio en el directorio actual o en el indicado. */
+        let fnames = [];    //Nombres de archivos (o carpetas) indicados.
+        validate_params(pars, fnames, ['v']);
+        if (err!='') return;
+        if (fnames.length==0) {   
+            addError("missing operand");
+            return;
+        }
+        //Banderas
+        let verb = pars.includes('-v');   //Bandera de archivos ocultos
+
+        //Crea los diectorios indicados
+        for (const dirname of fnames) {
+            let abspath = expand_rel_path(cur_path, dirname);
+            let dirs = abspath.split('/');
+            //Valida al directorio padre
+            let newdir = dirs.pop();
+            let parent = get_file(dirs.join('/'));
+            if (err!='') return;    //No lo ubica
+            if (parent.isFile()) {  //Terminó en un archivo
+                addError(parent.name + ": Not a directory");
+                return;
+            }
+            //Crea al directorio
+            mkdir(parent, newdir);
+            if (verb) response("mkdir: created directory '" + dirname + "'\n");
+        }
+    }
+    function do_rmdir(pars) {
+        /* Elimina un directorio en el directorio actual o en el indicado. */
+        let fnames = [];    //Nombres de archivos (o carpetas) indicados.
+        validate_params(pars, fnames, ['v']);
+        if (err!='') return;
+        if (fnames.length==0) {   
+            addError("missing operand");
+            return;
+        }
+        //Banderas
+        let verb = pars.includes('-v');   //Bandera de archivos ocultos
+        
+        //Elimina los diectorios indicados
+        for (const dirname of fnames) {
+            let abspath = expand_rel_path(cur_path, dirname);
+            //Valida al directorio padre
+            let target = get_file(abspath);
+            if (err!='') return;    //No lo ubica
+            if (target.isFile()) {  //Es un archivo
+                addError(target.name + ": Not a directory");
+                return;
+            }
+            if (Object.keys(target.dir).length>2) {  //No está vacío
+                addError("failed to remove '" + target.name + "': Directory not empty");
+                return;
+            }
+            //Elimina el directorio
+            if (verb) response("rmdir: removing directory '" + dirname + "'\n");
+            let parent = target.parent;
+            delete parent.dir[target.name];
+        }
+    }
+    function do_ls(pars) {
+        const SCR_WIDTH = 80;
+        /**Hace un listado del directorio actual */
+        function list_columns(file_arr) {
+            /* Lista los archivos que hay en file_arr[]. */
+            if (file_arr.length==0) return;   //No hay archivos
+            let maxlen = 0;    //Tamaño máximo de los nombres de los archivos
+            let totlen = 0;    //Tamaño total del nombre de los archivos 
+            for (let fil of file_arr) {   //Calcula el tamaño máximo de los nombres
+                totlen += fil.name.length + 2;
+                if (fil.name.length>maxlen) maxlen = fil.name.length;
+            }
+            maxlen += 2;        //Aumenta dos caracteres para dejar espacio
+            totlen -= 2;        //Corrige quitando espacio al último
+    
+            let ncols = Math.floor(SCR_WIDTH/maxlen);   //Calcula número de columnas para el listado
+            let nlins = Math.ceil(file_arr.length/ncols); //Filas por columna
+            if (ncols>=file_arr.length || totlen<=SCR_WIDTH) {    //Se puede listar en una sola fila
+                for (let fil of file_arr) {
+                    response(fil.name + "  ");
+                }
+                response("\n")
+            } else {    //Se debe listar en varias filas
+                //response("ncols=" + ncols + "\n");
+                //response("nlins=" + nlins + "\n");
+                //response("maxlen=" + maxlen + "\n");
+                //Lista por filas
+                for (let fil = 0; fil < nlins; fil++) {
+                    //Escribe por columnas
+                    for (let col = 0; col < ncols; col++) {
+                        let i = col*nlins+fil;
+                        if (i<file_arr.length) {
+                            let f_name = file_arr[i].name.padEnd(maxlen);
+                            response(f_name);
+                        }
+                    }
+                    response("\n")
+                }
+            }
+        }
+        function list_details(file_arr) {
+            /* Lista el detalle de los archivos que hay en file_arr[]. */
+            const opc = { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false };
+            const fecActual = new Date();
+            for (let fdat of file_arr) {
+                //Da formato a fecha
+                let fmod = fdat.mdate;
+                const fecFormat = fmod.toLocaleString('en-US', opc);   //"Mar 07, 2023, 03:22"
+                const parts = fecFormat.split(', ');
+                let fecShort;
+                if (fmod.getFullYear() === fecActual.getFullYear()) {
+                    fecShort = parts[0] + ' ' + parts[2];
+                } else {
+                    fecShort = parts[0] + '  ' + parts[1];
+                };
+                response(fdat.perm + " " + 
+                    String(fdat.links).padStart(3) + " "  +  //Enlaces
+                    fdat.owner.padEnd(8) + " " +       //Usuario
+                    fdat.group.padEnd(8) + " " +       //Grupo
+                    String(fdat.size).padStart(6) + " " +   //Tamaño
+                    fecShort + " " +   //Fecha
+                    fdat.name +  "\n");
+            }                
+        }
+        function list_files(file_arr, detail, sortmt, sortmtR, sorsiz, sorsizR) {
+            if (sortmt) {   //Ordenar por fecha. Recientes primero
+                file_arr.sort((a, b) => new Date(b.mdate) - new Date(a.mdate));
+            } else if (sortmtR) {   //Ordenar por fecha.
+                file_arr.sort((a, b) => new Date(a.mdate) - new Date(b.mdate));
+            } else if (sorsiz) {   //Ordenar por tamaño. Grandes primero
+                file_arr.sort((a, b) => new Date(b.size) - new Date(a.size));
+            } else if (sorsizR) {   //Ordenar por tamaño.
+                file_arr.sort((a, b) => new Date(a.size) - new Date(b.size));
+            }
+            if (detail) {
+                list_details(file_arr);
+            } else {
+                list_columns(file_arr);
+            }
+        }
+        function sep_fil_dir(file_arr, dirfil, files, dirs, dir_list ) {
+        /* Recibe un arreglo de nombres de archivos o directorios y separa esta lista en 
+        dos arreglos de objetos Cfile: Una para archivos (files), y otra para directorios
+        (dirs). La separación está condicionada a la bandera "dirfil".
+        Además, valida existencia de archivos (generando error si es necesario) de modo 
+        que todos los archivos devueltos en "files" o "dirs" existen en "dir_list".
+        */
+            for (let fname of file_arr) {
+                if (fname in dir_list) { //Existe
+                    if (dirfil) {   //No separa
+                        files.push(dir_list[fname]);
+                    } else {    //Separa
+                        if (dir_list[fname].isFile()) {
+                            files.push(dir_list[fname]);
+                        } else {
+                            dirs.push(dir_list[fname]);
+                        }
+                    }
+                } else {                //No existe
+                    addError(fname + ": No such file or directory");
+                }
+            }
+        }
+        function addAllNamesIn(files, hides, dir_list) {
+            /* Lee todos los nombres, de archivos o directorios, de la lista "dir_list". */
+            if (hides) {  //Sin filtro
+                files.push(...Object.values(dir_list));  //Agrega todos
+            } else {  //Filtrando archivos ocultos
+                for (const fname in dir_list) {
+                    if (fname[0]!=".") files.push(dir_list[fname]);
+                }
+            }
+        }
+        let file_arr = [];  //Lista de archivos que cumplen
+        //Busca si se ha indicado nombre de archivo
+        let fnames = [];    //Nombres de archivos (o carpetas) indicados.
+        validate_params(pars, fnames, ['a', 'v','l','d','t','tr','S','Sr']);
+        if (err!='') return;
+        //Filtra lista de archivos por nombre
+        let hides = pars.includes('-a');   //Bandera de archivos ocultos
+        let detail = pars.includes('-l');  //Bandera de lista detallada
+        let dirfil = pars.includes('-d');  //Directorio como archivos
+        let sortmt = pars.includes('-t');  //Ordenar por fecha de modificación
+        let sortmtR = pars.includes('-tr');  //Ordenar por fecha de modificación en reversa
+        let sorsiz = pars.includes('-S');  //Ordenar por tamaño
+        let sorsizR = pars.includes('-Sr');  //Ordenar por tamaño en reversa
+        if (fnames.length==0) fnames.push('.');    //No se ha indicado nombres. Se asume ".".
+        //Hay que buscar los que cumplan
+        for (let i = 0; i < fnames.length; i++) {
+            /*Por simplicidad, aquí asumimos que "fname" no contiene información del
+            directorio, sino tan solo el nombre. */
+            expandFileNameIn(file_arr, fnames[i], cur_dir.dir, hides);   //Archivos que cumplen
+        }
+        //Valida existencia de archivos y separa en archivos y carpetas de ser necesario
+        let files = []; //Arreglo de archivos (Cfile)
+        let dirs  = []; //Arreglo de directorios (Cfile)
+        sep_fil_dir(file_arr, dirfil, files, dirs, cur_dir.dir);
+        if (err!='') return;
+        //Lista en columnas o detalle
+        if (dirfil) {  //Listar directorios sin expandir
+            //Lista los archivos que están en "files".
+            list_files(files, detail, sortmt, sortmtR, sorsiz, sorsizR);
+        } else {  //Los directorios deben listarse expandidos al final
+            //Luego los de los directorios
+            if (files.length==0 && dirs.length==1) {   //Solo hay un directorio
+                //Listamos ese directorio. 
+                addAllNamesIn(files, hides, dirs[0].dir);
+                list_files(files, detail, sortmt, sortmtR, sorsiz, sorsizR);
+            } else {    //Hay más de un directorio
+                //Primero lista los archivos.
+                list_files(files, detail, sortmt, sortmtR, sorsiz, sorsizR);
+                if (dirs.length>0) response("\n");  //Separador
+                //Lista directorios
+                for (const dname of dirs) {
+                    response(dname.name + ":\n");
+                    addAllNamesIn(files, hides, dname.dir);
+                    list_files(files, detail, sortmt, sortmtR, sorsiz, sorsizR);
+                }
+            }
+        }
+    }
+    function do_whoami(pars) {
+        let fnames = [];    //Nombres de archivos (o carpetas) indicados.
+        validate_params(pars, fnames, []);
+        if (err!='') return;
+        //Muestra usuario
+        response(log_user + "\n");
+    }
+    function do_help(pars) {
+        response("Titux OS System. Pure Javascript Linux Emulator.\n");
+        response("Kernel 0.0.3-Educational-version. Created by Tito Hinostroza.\n");
+        response("The entire emulator is running locally on your PC, without remote connection.\n");
+        response("The file system can be manipulated, but the state will be restored when you refresh the browser. ");
+        response("There is no support for redirects, pipes or permissions. \n");
+        response("Only a few commands are implemented:\n");
+        response("\n");
+        response("cd [dir name]\n");
+        response("date\n");
+        response("echo [-n] [arg ...]\n");
+        response("help\n");
+        response("ls [files] [-a] [-d] [-l] [-t[r]] [-S[r]]\n");
+        response("mkdir [dir names] [-v]\n");
+        response("rmdir [dir names] [-v]\n");
+        response("pwd\n");
+        response("whoami\n");
+    }
+    function init_filesystem() {
+        //Crea la raiz
+        root_dir = new Cfile('/', 'drwxr-xr-x', 'root', 'root', 4096, null);
+        //Inicia creación de directorios
+        log_user = 'root';
+        log_group = 'root';
+        cur_path = "";  //Directorio raiz
+        cur_dir = root_dir;
+        //Crea directorios del sistema
+        cur_dir.dir['.']  =  new Cfile('.', 'drwxr-xr-x', log_user, log_group, 4096, cur_dir);
+        cur_dir.dir['..'] =  new Cfile('..','drwxr-xr-x', log_user, log_group, 4096, cur_dir);
+        cur_dir.dir['.'].dir  = cur_dir.dir;    //Actualiza diccionario de directorios
+        cur_dir.dir['..'].dir = cur_dir.dir;    //Actualiza diccionario de directorios
+        mkdir(cur_dir, "bin");
+        mkdir(cur_dir, "dev");  
+        mkdir(cur_dir, "lib");  
+        mkdir(cur_dir, "root");
+        let home_dir = mkdir(cur_dir, 'home');
+        mkdir(home_dir, 'root');    //Directorio /home/root
+
+        mkdir(cur_dir, "aaa");
+        mkfile(cur_dir, "aaa.txt"           , new Date("2024/01/28 01:20:00"), "Hola");
+        mkfile(cur_dir, "bbb.txt"           , new Date("2024/01/27 05:00:00"), "Hola mundo");  
+        mkfile(cur_dir, "nombre_algo_largo" , new Date("2024/10/13 01:30:00"), "a");  
+        mkfile(cur_dir, "prueba.txt"        , new Date("2023/10/27 01:05:00"), "Hola mundo");  
+        //Crea carpeta de usuario
+        log_user = 'user';
+        log_group = 'user';
+        let user_dir = mkdir(home_dir, 'user');
+        mkdir(user_dir, 'Documents');
+    }
+    //Procesamiento de entrada
     function executeSeq(escape_type, escape_seq) {
         /* Ejecuta la secuencia de escape capturada e inicia el procesamiento de una
         nueva secuencia */
@@ -48,6 +548,13 @@ function TitoShellEmul(response) {
         }
         //Inicia nueva secuencia
         escape_mode = 0;    //Termina secuencia.
+    }
+    function getParameters(cadena) {
+        /* Divide la cadena en tokens separados por espacios. Los tokens 
+        delimitados por comillas se consideran como un solo token. */
+        const regex = /"([^"]+)"|\S+/g; // Captura texto entre comillas o palabras no espaciadas
+        //Elimina las comillas
+        return cadena.match(regex).map(token => token.replace(/(^"|"$)/g, '')); 
     }
     function processEnter() {
         /* Procesa la tecla <Enter>. Normalmente será para la ejecución de un comando. */
@@ -76,9 +583,9 @@ function TitoShellEmul(response) {
             curCommand = '';
             curXpos = 0;
         } else if (modeShell==SM_COMMAND) {
-            err = "";
-            let parts = curCommand.split(/\s+/);
-            let command = parts[0];
+            clearStderr();
+            let pars = getParameters(curCommand.trim());
+            let command = pars[0];
             if (command =='') {
             } else if (command=='date') {
                 let cur_date = new Date().toGMTString(); 
@@ -87,13 +594,23 @@ function TitoShellEmul(response) {
                 if (cur_path=='') response("/\n"); 
                 else response(cur_path + "\n");
             } else if (command=='ls') {
-                do_ls(parts);
+                do_ls(pars);
             } else if (command=='cd') {
-                do_cd(parts);
+                do_cd(pars);
+            } else if (command=='echo') {
+                do_echo(pars);
+            } else if (command=='mkdir') {
+                do_mkdir(pars);
+            } else if (command=='rmdir') {
+                do_rmdir(pars);
+            } else if (command=='whoami') {
+                do_whoami(pars);
+            } else if (command=='help') {
+                do_help(pars);
             } else{
-                err = "Command not found";
+                addError("Command not found");
             }
-            if (err!="") response(curCommand + ": " + err + "\n");
+            if (err!="") sendStderror(command);
             curCommand = '';
             curXpos = 0;
             response(prompt);
@@ -142,238 +659,6 @@ function TitoShellEmul(response) {
             shell.writeCode(keyCode);
         }
     }
-    function expandFiles(fname, fdir) {
-        /*Expande un nombre de archivo con comodines (fname) en una lista de archivos, 
-        de acuerdo a la lista de archivos que existan en la lista "fdir".
-        Devuelve la lista de archivos en una lista  con los archivos que cumplen el 
-        patrón.*/
-        let flist = {};
-        if (/[\*\?]/.test(fname)) { //Contiene caracteres comodín
-            //Hay que expandir
-            const regex = new RegExp(fname.replace(/\?/g, '.').replace(/\*/g, '.*')); // Convierte comodines a una expresión regular
-            for (const clave in fdir) {
-                if (regex.test(clave)) { // Verificar si la clave coincide con el patrón
-                    flist[clave] = fdir[clave]; // Copiar al nuevo diccionario
-                }
-            }            
-        } else {    //No contiene caracteres comodín
-            for (const clave in fdir) {
-                if (clave==fname) { // Verificar si existe
-                    flist[clave] = fdir[clave]; // Copiar al nuevo diccionario
-                }
-            }            
-        }
-        return flist;
-    }
-    function expand_rel_path(basepath, rel_path) {
-        /* Expande la ruta relativa "rel_path" y devuelve una ruta absoluta. 
-        "basepath" no debe incluir el caracter "/" al final */
-        if (rel_path[0]=='/') { //Es absoluta
-            return rel_path;
-        } else {
-            return basepath + "/" + rel_path;
-        }
-    }
-    function do_cd(parts) {
-        /*Accede al directorio indicado */
-        let path = parts[1]; 
-        if (path=='/') {
-            cur_path = '';
-            cur_dir = fsystem_dir;
-            return;
-        }
-        let new_path = expand_rel_path(cur_path, path);
-        let dirs = new_path.split('/');
-        //Verifica si existe la ruta absoluta
-        let next_dir = fsystem_dir;
-        let last_dir = null;
-        new_path = '';  //Para construir la ruta (que no siempre será igual a "path", como cuando contiene a los directorios '.' o '..').
-        for (let i = 1; i < dirs.length; i++) {
-            let dirname = dirs[i];
-            if (dirname == '.') {
-                continue;
-            } else if (dirname == '..') {  //Directorio padre
-                if (new_path=='') continue;    //Ya estamos en la raiz
-                else {
-                    next_dir = last_dir;
-                    let p = new_path.split('/');
-                    p.pop();
-                    new_path = p.join('/');
-                }
-            } else if (dirname in next_dir) {
-                last_dir = next_dir;
-                next_dir = next_dir[dirname][6];   //Toma la lista del directorio
-                if (typeof next_dir === 'string') {  //Es un archivo
-                    err = dirname + ": Not a directory";
-                    return;
-                }
-                new_path += '/'+dirname;
-            } else {
-                err = 'No such file or directory';
-                return;
-            }
-        }
-        //Existe. Actualiza cur_path.
-        cur_path = new_path;
-        cur_dir = next_dir;
-    }
-    function do_ls(parts) {
-        /**Hace un listado del directorio actual */
-        function list_columns(fnames, maxlen, totlen) {
-            let ncols = Math.floor(80/maxlen);  //Calcula número de columnas para el listado
-            let nlins = Math.ceil(fnames.length/ncols);  //Filas por columna
-            if (ncols>=fnames.length || totlen<=80) {    //Se puede listar en una sola fila
-                for (let i = 0; i < fnames.length; i++) {
-                    response(fnames[i] + "  ");
-                }
-                response("\n")
-            } else {    //Se debe listar en varias filas
-                //response("ncols=" + ncols + "\n");
-                //response("nlins=" + nlins + "\n");
-                //response("maxlen=" + maxlen + "\n");
-                //Lista por filas
-                for (let fil = 0; fil < nlins; fil++) {
-                    //Escribe por columnas
-                    for (let col = 0; col < ncols; col++) {
-                        let i = col*nlins+fil;
-                        if (i<fnames.length) {
-                            let f_name = fnames[i].padEnd(maxlen);
-                            response(f_name);
-                        }
-                    }
-                    response("\n")
-                }
-            }
-        }
-        function list_details(the_dir) {
-                const opc = { year: 'numeric', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false };
-                const fecActual = new Date();
-                for (let key in the_dir) {
-                    let fdat = the_dir[key];
-                    //Da formato a fecha
-                    let fmod = fdat[5];
-                    const fecFormat = fmod.toLocaleString('en-US', opc);   //"Mar 07, 2023, 03:22"
-                    const parts = fecFormat.split(', ');
-                    let fecShort;
-                    if (fmod.getFullYear() === fecActual.getFullYear()) {
-                        fecShort = parts[0] + ' ' + parts[2];
-                    } else {
-                        fecShort = parts[0] + '  ' + parts[1];
-                    };
-                    response(fdat[0] + " " + 
-                        String(fdat[1]).padStart(3) + " "  +  //Permisos
-                        fdat[2].padEnd(8) + " " +       //Usuario
-                        fdat[3].padEnd(8) + " " +       //Grupo
-                        String(fdat[4]).padStart(6) + " " +   //Tamaño
-                        fecShort + " " +   //Fecha
-                        key +  "\n");
-                }                
-        }
-        let match_dir = [];  //Directorio de archivos que cumplen
-        //Busca si hay nombre de archivo
-        let fname = '';
-        for (let i = 1; i < parts.length; i++) {
-            let par = parts[i].trim();  //Parámetro
-            if (par[0]!='-') fname = par;
-        }
-        //Filtra lista de archivos por nombre
-        if (fname=='') {
-            if (parts.includes('-a')) {  //Sin filtro
-                match_dir = cur_dir;  
-            } else {  //Filtrando archivos ocultos
-                for (const fname in cur_dir) {
-                    if (fname[0]!=".") match_dir[fname] = cur_dir[fname];
-                }
-            }
-        } else {
-            //Hay que buscar los que cumplan
-            /*Por simplicidad, aquí asumimos que "fname" no contiene información del
-            directorio, sino tan solo el nombre. */
-            match_dir = expandFiles(fname, cur_dir);   //Archivos que cumplen
-        }
-        //Lista el directorio "match_dir"
-        let maxlen = 0;    //Tamaño máximo de los nombres de los archivos
-        let totlen = 0;    //Tamaño total del nombre de los archivos 
-        for (let f_name in match_dir) {   //Calcula el tamaño máximo de los nombres
-            totlen += f_name.length + 2;
-            if (f_name.length>maxlen) maxlen = f_name.length;
-        }
-        maxlen += 2;        //Aumenta dos caracteres para dejar espacio
-        totlen -= 2;        //Corrige quitando espacio al último
-        let fnames = Object.keys(match_dir);  //Para poder iterar sobre los archivos
-        if (fnames.length==0) return;   //No hay archivos
-        if (parts.includes('-l')) list_details(match_dir); 
-        else list_columns(fnames, maxlen, totlen);
-    }
-    function do_getdir(path) {
-        /* Devuelve el directorio "path" en una lista o diccionario. */
-        if (path=="/") {    //Directorio raiz
-            return fsystem_dir;
-        } else { //Hay que buscar el directorio
-            let next_dir = {};
-            if (path[0] == '/') {   //Ruta absoluta
-                let dirs = path.split('/');
-                next_dir = fsystem_dir;   //DIrectorio inicial
-                for (let i = 0; i < dirs.length; i++) {
-                    if (dirs[i] in next_dir) {
-                        next_dir = next_dir[6];  //Toma la lista de directorio
-                    } else {
-                        err = 'No such file or directory';
-                        return next_dir;
-                    }
-                }
-                return next_dir;
-            } else {    //Ruta relativa
-                err = 'Invalid path';
-                ////// Completar
-            }
-        }
-    }
-    function do_mkdir(dir_name) {
-        /* Crea un nuevo directorio, en el directorio actual.*/
-        //Verifica si existe ya el nombre.
-        if (dir_name in cur_dir) {
-            err = "Cannot create directory '" + dir_name + "': File exists";
-            return;
-        }
-        //Creamos el nuevo  directorio
-        let new_dir = [];
-        //Creamos la entrada del directorio
-        cur_dir[dir_name] = ['drwxr-xr-x', 1, log_user, log_group, 4096, new Date(), new_dir];
-        /* Una carpeta de archivos es una lista con el nombre del archivo como clave.
-        Los archivos se definen como una lista con los siguientes campos:
-            - Permisos del archico,
-            - Número de enlaces
-            - Propietario del archivo
-            - Grupo al que pertenece
-            - Tamaño del archivo en bytes
-            - Fecha y hora de la última modificación
-            - Contenido del archivo, si es un archivo, o lista de archivos si es una carpeta.
-        */
-        //Crea los directorios del sistema
-        new_dir['.']  = ['drwxr-xr-x', 1, log_user, log_group, 4096, new Date(), new_dir];
-        new_dir['..'] = ['drwxr-xr-x', 1, log_user, log_group, 4096, new Date(), null];  //Formalmente deberían tener el usuario y grupo del directorio padre
-    }
-    function init_filesystem() {
-        //filesystem = new Array(NROWS);  
-        //Inicia creación de directorios
-        log_user = 'root';
-        log_group = 'root';
-        cur_path = "";  //Directorio raiz
-        cur_dir = fsystem_dir;
-        do_mkdir(".");
-        do_mkdir("..");
-        do_mkdir("bin");
-        do_mkdir("dev");  
-        do_mkdir("lib");  
-        do_mkdir('home');
-        fsystem_dir["usr123456789012"]   = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/01/28 01:20:00"), "Hola mundo"];  
-        fsystem_dir["camino.xml"]        = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/01/27 05:00:00"), "Hola mundo"];  
-        fsystem_dir["programa"]          = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/01/15 01:00:00"), "Hola mundo"];  
-        fsystem_dir["nombre_algo_largo"] = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/10/13 01:30:00"), "Hola mundo"];  
-        do_mkdir('root');
-        fsystem_dir["prueba.txt"]        = ['-rwxrwxrwx', 1, 'usuario', 'grupo', 4096, new Date("2024/10/27 01:05:00"), "Hola mundo"];  
-    }
     function init() {
         /* Inicializa el emulador del Sistema Operativo e inicia el modo de inicio de
          sesión */
@@ -388,7 +673,7 @@ function TitoShellEmul(response) {
         //Mensaje de saludo
         response("\n");
         response("Titux OS System. Javascript Linux Emulator.\n");
-        response("Kernel 0.0.2-Educational-version.\n");
+        response("Kernel 0.0.3-Educational-version.\n");
         response("\n");
         ////////////// Prueba de control de pantalla //////////////
 //        response("\x1B[5;5fTexto en (5,5)");
@@ -396,22 +681,6 @@ function TitoShellEmul(response) {
 //        response("\x1B[1J");
 //        response("\x1B[s");
 //        response("\x1B[u");
-
-//        response("\x1B[1mTexto en negrita\n");
-//        response("\x1B[0;4mTexto subrayado\n");
-//        response("\x1B[0;7mTexto en negativo\n");
-//        
-//        response("\x1B[0;90mTexto en negro\n");
-//        response("\x1B[0;91mTexto en rojo\n");
-//        response("\x1B[0;92mTexto en verde\n");
-//        response("\x1B[0;93mTexto en amarillo\n");
-//        response("\x1B[0;94mTexto en azul\n");
-//        response("\x1B[0;95mTexto en magenta\n");
-//        response("\x1B[0;96mTexto en cian\n");
-//        response("\x1B[0;97mTexto en blanco\n");
-//
-//        response("\x1B[0;39mTexto en color normal\n");
-//
         //////////////////////////////////////////////////////////
         init_filesystem();
 //        modeShell = SM_LOGIN;   //Modo de inicio de sesión
