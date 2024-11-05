@@ -2,7 +2,7 @@
 
 Pure Javascript linux shell emulator
 
-![image](https://github.com/user-attachments/assets/83b4d268-00df-498c-9e1e-8947dc47660c)
+![image](https://github.com/user-attachments/assets/10080173-047e-4ebc-905a-5427e4f9f283)
 
 Titux-OS is a Javascript library that implements a Linux shell emulator, intended to run completely in any Web browser.
 
