@@ -6,9 +6,21 @@ Pure Javascript linux shell emulator
 
 Titux-OS is a Javascript library that implements a Linux shell emulator, intended to run completely in any Web browser.
 
-This emulator is written entirely in Javascript and runs offline.
+This emulator is written entirely in Javascript and, after downloading the website, you do not need an internet connection to work.
 
-At the moment, only the login and file listing commands are implemented.
+At the moment, only a few commands are implemented:
+
+* cd [dir name]
+* date
+* echo [-n] [arg ...]
+* help
+* ls [files] [-a] [-d] [-l] [-t[r]] [-S[r]]
+* mkdir [dir names] [-v]
+* rmdir [dir names] [-v]
+* pwd
+* whoami
+
+There is no support for redirects, pipes or permissions.
 
 The goal is not to have a complete Linux, but rather a shell emulator that allows you to 
 perform basic operations, without having to be connected to a real server and without 
