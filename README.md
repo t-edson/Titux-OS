@@ -14,6 +14,7 @@ At the moment, only a few commands are implemented:
 * date
 * echo [-n] [arg ...]
 * help
+* hostname
 * ls [files] [-a] [-d] [-l] [-t[r]] [-S[r]]
 * mkdir [dir names] [-v]
 * rmdir [dir names] [-v]
