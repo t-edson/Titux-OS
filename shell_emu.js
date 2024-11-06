@@ -1,4 +1,8 @@
-/* Librería en Javascript para emular el comportamiento de una Shell de Linux*/
+/* Librería en Javascript para emular el comportamiento de una Shell de Linux.
+            Por Tito Hinostroza
+Referencias:
+https://www.fpgenred.es/GNU-Linux/expansin_del_shell.html
+*/
 "use strict";
 /* Clase que define a un archivo o carpeta. Todos los archivos o carpetas se representan
 como uno de estos objetos. Las carpetas usan el contenedor "this.dir" como un diccionario
@@ -28,11 +32,13 @@ class Cfile {
         return (this.parent == null);
     }
 }
+/* Clase principal que define al shell */
 function TitoShellEmul(response) {
     let curCommand = "";    //Comando actual
     let curXpos = 0;        //Posición actual del cursor con respecto al comando actual
     let modeShell = 0;      //Modo de trabajo del shell
-    let prompt = '$ ';
+    let hostname = 'pc';    //Nombre del equipo
+    let prompt = '[\\u@\\h \\W]\$ ';
     let user_list = [];     //Lista de usuarios
     let group_list = [];     //Lista de grupos
     let log_user  = '';     //Usuario actual
@@ -67,24 +73,39 @@ function TitoShellEmul(response) {
         response(command + ": " + err + "\n");        
     }
     //Funciones de archivo
-    function expandFileNameIn(file_arr, fname, cur_list, hides) {
+    function expandFileNameIn(file_arr, fname, base_dir, hides) {
         /* Expande un nombre de archivo (o carpeta) con comodines (cadena "fname"), y
         agrega al arreglo "file_arr". Si el nombre de archivo "fname" incluye comodines,
-        expande la lista de acuerdo a los archivos que existan en la lista "cur_list" 
-        ( que representa al directorio actual).
+        expande la lista de acuerdo a los archivos que existan en el direct. "base_dir"
+        (que representa al directorio actual).
         La bandera "hides" indica si se deben incluir archivos ocultos.
         No se validan que todos los nombres devueltos existan como archivos o carpetas de
-        "cur_list". */
-        if (fname=='*') {   //Todos los archivos de "cur_list"
+        "base_dir". */
+        if (fname=='*') {   //Todos los archivos de "base_dir"
             if (hides) {    //Incluye todos
-                file_arr.push(...Object.keys(cur_list));  //Agrega todos
+                file_arr.push(...Object.keys(base_dir.dir));  //Agrega todos
             } else {        //No ocultos
-                for (const clave in cur_list) {
+                for (const clave in base_dir.dir) {
                     if (clave[0]!='.') file_arr.push(clave);
                 }            
             }
         } else if (/[\*\?]/.test(fname)) { //Contiene caracteres comodín
             //Hay que expandir.
+            let path = '';
+            if (fname.includes('/')) {  //Incluye información de ruta
+                //Obtiene ruta y nombre de archivo
+                let path_a = fname.split('/')
+                fname = path_a.pop();
+                path = path_a.join('/');
+                //if (path.includes('*') || path.includes('?')) { //No soportamos rutas con comodín
+                //    addError('Invalid path: ' + path);
+                //    return;
+                //}
+                //Actualiza nueva ruta base 
+                base_dir = get_file_from(path, base_dir);
+                if (err!='') return;
+                path += '/';   //Prepara para concatenar
+            }
             //Crea una expresión regular equivalente a los comodines
             const regex = new RegExp('^'+fname.replace(/\?/g, '.').replace(/\*/g, '.*')+'$'); 
             //Soporte a comodines *, ? y []
@@ -95,10 +116,11 @@ function TitoShellEmul(response) {
             //    .replace(/\*/g, '.*')                    // * se convierte en cero o más caracteres
             //    .replace(/\[([^\]]+)\]/g, '[$1]')        // Soporta los corchetes
             //    + '$')
-            for (const clave in cur_list) {
+            //Busca archivos que coincidan con el patrón
+            for (const clave in base_dir.dir) {
                 if (!hides && clave[0]=='.') continue;
                 if (regex.test(clave)) {    //Verificar si la clave coincide con el patrón
-                    file_arr.push(clave);      //Agrega al arreglo
+                    file_arr.push(path + clave);      //Agrega al arreglo
                 }
             }            
         } else {    //No contiene caracteres comodín
@@ -124,20 +146,26 @@ function TitoShellEmul(response) {
         }
         return path;
     }
-    function get_file(path) {
-        /* Devuelve un objeto Cfile a partir de la cadena "path". El objeto devuelto 
-        puede ser un archivo o directorio. Si no puede ubicar al archivo destino, 
-        devuelve NULL y genera error en "stderror".*/
+    function get_file_from(path, base_dir) {
+        /* Devuelve un objeto Cfile a partir de la cadena "path" y del directorio base
+        "base_dir". El parámetro "path" puede tener una ruta relativa o absoluta. Si la
+        ruta del archivo es absoluta, se ignora el directorio base.
+        El objeto devuelto puede ser un archivo o directorio. Si no puede ubicar al 
+        archivo destino, devuelve NULL y genera error en "stderror".*/
         if (path=='/') {
-            cur_path = '';
-            cur_dir = root_dir;
-            return;
+            return root_dir;
         }
-        let new_path = expand_rel_path(cur_path, path);
-        let dirs = new_path.split('/');
-        //Verifica si existe la ruta absoluta
-        let next_dir = root_dir;
-        for (let i = 1; i < dirs.length; i++) {
+        //Prepara exploración a través de la ruta
+        let next_dir;
+        let dirs = path.split('/');
+        if (path[0]=='/') {
+            next_dir = root_dir;
+            dirs.shift();   //Quita directorio vacío
+        } else {
+            next_dir = base_dir;
+        }
+        //Explora por el árbol de directorios a partir de "next_dir".
+        for (let i = 0; i < dirs.length; i++) {
             if (next_dir.isFile()) {  //Es un archivo. No podemos seguir avanzando.
                 addError(next_dir.name + ": Not a directory");
                 return null;
@@ -221,7 +249,7 @@ function TitoShellEmul(response) {
         /*Accede al directorio indicado */
         if (pars.length==1) return;  //Sin parámetros
         let path = pars[1]; 
-        let new_dir = get_file(path);
+        let new_dir = get_file_from(path, cur_dir);
         if (err != '') return;
         if (new_dir.isFile()) {  //Terminó en un archivo
             addError(new_dir.name + ": Not a directory");
@@ -263,7 +291,7 @@ function TitoShellEmul(response) {
             let dirs = abspath.split('/');
             //Valida al directorio padre
             let newdir = dirs.pop();
-            let parent = get_file(dirs.join('/'));
+            let parent = get_file_from(dirs.join('/'), cur_dir);
             if (err!='') return;    //No lo ubica
             if (parent.isFile()) {  //Terminó en un archivo
                 addError(parent.name + ": Not a directory");
@@ -290,7 +318,7 @@ function TitoShellEmul(response) {
         for (const dirname of fnames) {
             let abspath = expand_rel_path(cur_path, dirname);
             //Valida al directorio padre
-            let target = get_file(abspath);
+            let target = get_file_from(abspath, cur_dir);
             if (err!='') return;    //No lo ubica
             if (target.isFile()) {  //Es un archivo
                 addError(target.name + ": Not a directory");
@@ -386,7 +414,7 @@ function TitoShellEmul(response) {
                 list_columns(file_arr);
             }
         }
-        function sep_fil_dir(file_arr, dirfil, files, dirs, dir_list ) {
+        function sep_fil_dir(file_arr, dirfil, files, dirs, base_dir) {
         /* Recibe un arreglo de nombres de archivos o directorios y separa esta lista en 
         dos arreglos de objetos Cfile: Una para archivos (files), y otra para directorios
         (dirs). La separación está condicionada a la bandera "dirfil".
@@ -394,18 +422,17 @@ function TitoShellEmul(response) {
         que todos los archivos devueltos en "files" o "dirs" existen en "dir_list".
         */
             for (let fname of file_arr) {
-                if (fname in dir_list) { //Existe
-                    if (dirfil) {   //No separa
-                        files.push(dir_list[fname]);
-                    } else {    //Separa
-                        if (dir_list[fname].isFile()) {
-                            files.push(dir_list[fname]);
-                        } else {
-                            dirs.push(dir_list[fname]);
-                        }
+                let file = get_file_from(fname, base_dir);
+                if (err!='') return;
+                //Separa cuando aplique
+                if (dirfil) {   //No separa
+                    files.push(file);
+                } else {    //Separa
+                    if (file.isFile()) {
+                        files.push(file);
+                    } else {
+                        dirs.push(file);
                     }
-                } else {                //No existe
-                    addError(fname + ": No such file or directory");
                 }
             }
         }
@@ -422,7 +449,7 @@ function TitoShellEmul(response) {
         let file_arr = [];  //Lista de archivos que cumplen
         //Busca si se ha indicado nombre de archivo
         let fnames = [];    //Nombres de archivos (o carpetas) indicados.
-        validate_params(pars, fnames, ['a', 'v','l','d','t','tr','S','Sr']);
+        validate_params(pars, fnames, ['a','v','l','d','t','tr','S','Sr']);
         if (err!='') return;
         //Filtra lista de archivos por nombre
         let hides = pars.includes('-a');   //Bandera de archivos ocultos
@@ -433,16 +460,14 @@ function TitoShellEmul(response) {
         let sorsiz = pars.includes('-S');  //Ordenar por tamaño
         let sorsizR = pars.includes('-Sr');  //Ordenar por tamaño en reversa
         if (fnames.length==0) fnames.push('.');    //No se ha indicado nombres. Se asume ".".
-        //Hay que buscar los que cumplan
+        //Hace la expansión de los nombres de archivos proporcionados
         for (let i = 0; i < fnames.length; i++) {
-            /*Por simplicidad, aquí asumimos que "fname" no contiene información del
-            directorio, sino tan solo el nombre. */
-            expandFileNameIn(file_arr, fnames[i], cur_dir.dir, hides);   //Archivos que cumplen
+            expandFileNameIn(file_arr, fnames[i], cur_dir, hides);   //Archivos que cumplen
         }
         //Valida existencia de archivos y separa en archivos y carpetas de ser necesario
         let files = []; //Arreglo de archivos (Cfile)
         let dirs  = []; //Arreglo de directorios (Cfile)
-        sep_fil_dir(file_arr, dirfil, files, dirs, cur_dir.dir);
+        sep_fil_dir(file_arr, dirfil, files, dirs, cur_dir);
         if (err!='') return;
         //Lista en columnas o detalle
         if (dirfil) {  //Listar directorios sin expandir
@@ -474,6 +499,13 @@ function TitoShellEmul(response) {
         //Muestra usuario
         response(log_user + "\n");
     }
+    function do_hostname(pars) {
+        let fnames = [];    //Nombres de archivos (o carpetas) indicados.
+        validate_params(pars, fnames, []);
+        if (err!='') return;
+        //Muestra nombre de pc
+        response(hostname + "\n");
+    }
     function do_help(pars) {
         response("Titux OS System. Pure Javascript Linux Emulator.\n");
         response("Kernel 0.0.3-Educational-version. Created by Tito Hinostroza.\n");
@@ -486,6 +518,7 @@ function TitoShellEmul(response) {
         response("date\n");
         response("echo [-n] [arg ...]\n");
         response("help\n");
+        response("hostname\n");
         response("ls [files] [-a] [-d] [-l] [-t[r]] [-S[r]]\n");
         response("mkdir [dir names] [-v]\n");
         response("rmdir [dir names] [-v]\n");
@@ -507,23 +540,40 @@ function TitoShellEmul(response) {
         cur_dir.dir['..'].dir = cur_dir.dir;    //Actualiza diccionario de directorios
         mkdir(cur_dir, "bin");
         mkdir(cur_dir, "dev");  
-        mkdir(cur_dir, "lib");  
-        mkdir(cur_dir, "root");
+        mkdir(cur_dir, "etc");  
         let home_dir = mkdir(cur_dir, 'home');
         mkdir(home_dir, 'root');    //Directorio /home/root
 
+        mkdir(cur_dir, "lib");  
+        mkdir(cur_dir, "root");
+        mkdir(cur_dir, "usr");
         mkdir(cur_dir, "aaa");
-        mkfile(cur_dir, "aaa.txt"           , new Date("2024/01/28 01:20:00"), "Hola");
-        mkfile(cur_dir, "bbb.txt"           , new Date("2024/01/27 05:00:00"), "Hola mundo");  
-        mkfile(cur_dir, "nombre_algo_largo" , new Date("2024/10/13 01:30:00"), "a");  
-        mkfile(cur_dir, "prueba.txt"        , new Date("2023/10/27 01:05:00"), "Hola mundo");  
+        mkfile(cur_dir, "aaa.txt"         , new Date("2024/01/28 01:20:00"), "Hola");
+        mkfile(cur_dir, "bbb.txt"         , new Date("2024/01/27 05:00:00"), "Hola mundo");  
+        mkfile(cur_dir, "nombre_algo_largo",new Date("2024/10/13 01:30:00"), "a");  
+        mkfile(cur_dir, "test.txt"        , new Date("2023/10/27 01:05:00"), "Hola mundo");  
         //Crea carpeta de usuario
         log_user = 'user';
         log_group = 'user';
         let user_dir = mkdir(home_dir, 'user');
+        mkdir(user_dir, 'Desktop');
         mkdir(user_dir, 'Documents');
+        mkdir(user_dir, 'Downloads');
+        mkdir(user_dir, 'Music');
+        mkdir(user_dir, 'Pictures');
+        mkdir(user_dir, 'Public');
+        mkdir(user_dir, 'Videos');
+        mkfile(user_dir, "a.txt"           , new Date("2024/01/28 01:20:00"), "Hola");
+        mkfile(user_dir, "b.txt"           , new Date("2024/01/27 05:00:00"), "Hola mundo");  
     }
     //Procesamiento de entrada
+    function sendPrompt() {
+        /* Muestra el prompt por el terminal */
+        let tmp = prompt.replace('\\u', log_user)
+        .replace('\\h', hostname)
+        .replace('\\W', cur_path);
+        response(tmp);
+    }
     function executeSeq(escape_type, escape_seq) {
         /* Ejecuta la secuencia de escape capturada e inicia el procesamiento de una
         nueva secuencia */
@@ -549,12 +599,16 @@ function TitoShellEmul(response) {
         //Inicia nueva secuencia
         escape_mode = 0;    //Termina secuencia.
     }
-    function getParameters(cadena) {
-        /* Divide la cadena en tokens separados por espacios. Los tokens 
+    function getParameters(command) {
+        /* Divide la cadena "command" en tokens separados por espacios. Los tokens 
         delimitados por comillas se consideran como un solo token. */
-        const regex = /"([^"]+)"|\S+/g; // Captura texto entre comillas o palabras no espaciadas
-        //Elimina las comillas
-        return cadena.match(regex).map(token => token.replace(/(^"|"$)/g, '')); 
+        if (command.trim()=='') {
+            return [''];    //Devuelve un solo elemento vacío
+        } else {
+            const regex = /"([^"]+)"|\S+/g; // Captura texto entre comillas o palabras no espaciadas
+            //Elimina las comillas
+            return command.match(regex).map(token => token.replace(/(^"|"$)/g, '')); 
+        }
     }
     function processEnter() {
         /* Procesa la tecla <Enter>. Normalmente será para la ejecución de un comando. */
@@ -572,9 +626,10 @@ function TitoShellEmul(response) {
                 //Pasa a modo comando
                 modeShell=SM_COMMAND;
                 log_group = user_list[log_user][1];     //Lee grupo
+                do_cd(['','/home/'+log_user]);
                 let last_login = new Date().toGMTString(); 
                 response('Last login: ' + last_login + " from tty1\n");
-                response(prompt);
+                sendPrompt();
             } else {
                 response("Login incorrect.\n\n");
                 modeShell = SM_LOGIN;   //Modo de inicio de sesión
@@ -605,6 +660,8 @@ function TitoShellEmul(response) {
                 do_rmdir(pars);
             } else if (command=='whoami') {
                 do_whoami(pars);
+            } else if (command=='hostname') {
+                do_hostname(pars);
             } else if (command=='help') {
                 do_help(pars);
             } else{
@@ -613,7 +670,7 @@ function TitoShellEmul(response) {
             if (err!="") sendStderror(command);
             curCommand = '';
             curXpos = 0;
-            response(prompt);
+            sendPrompt();
         } else {
             curCommand = '';
             curXpos = 0;
@@ -683,10 +740,11 @@ function TitoShellEmul(response) {
 //        response("\x1B[u");
         //////////////////////////////////////////////////////////
         init_filesystem();
-//        modeShell = SM_LOGIN;   //Modo de inicio de sesión
-        modeShell = SM_COMMAND;   //Modo de comandos
-        log_user = 'root';
-        log_group = 'root';
+        modeShell = SM_LOGIN;   //Modo de inicio de sesión
+
+//        modeShell = SM_COMMAND;   //Modo de comandos
+//        log_user = 'root';
+//        log_group = 'root';
 
         response("\x1B[0m");    //Restaura atributos
         response('Login: ');
