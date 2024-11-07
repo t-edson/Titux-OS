@@ -32,31 +32,44 @@ class Cfile {
         return (this.parent == null);
     }
 }
+/* Clase que define a un usaurio */
+class Cuser {
+    constructor(name, pwd, group) {
+        this.name   = name;     //Nombre del usuario
+        this.pwd    = pwd;      //Contraseña
+        this.group  = group;    //Grupo al que pertenece
+        this.home_path = '';    //Directorio home de usuario
+        this.last_login = new Date();   //Último inicio de sesión
+        this.hist_file = '';    //Archivo de historial
+    }
+}
 /* Clase principal que define al shell */
 function TitoShellEmul(response) {
     let curCommand = "";    //Comando actual
-    let curXpos = 0;        //Posición actual del cursor con respecto al comando actual
+    let curXpos   = 0;      //Posición actual del cursor con respecto al comando actual
     let modeShell = 0;      //Modo de trabajo del shell
-    let hostname = 'pc';    //Nombre del equipo
-    let prompt = '[\\u@\\h \\W]\$ ';
+    let hostname  = 'pc';   //Nombre del equipo
+    let prompt    = '[\\u@\\h \\W]\$ ';
     let user_list = [];     //Lista de usuarios
-    let group_list = [];     //Lista de grupos
-    let log_user  = '';     //Usuario actual
-    let log_pass  = '';
-    let log_group = '';     //Grupo actual
+    let group_list = [];    //Lista de grupos
+    //Datos de usuario
+    let cur_user  = '';     //Usuario actual
+    let cur_pass  = '';     //Contraseña
+    let cur_group = '';     //Grupo actual
+    let cur_hist  = null;   //Archivo de historial actual: ".bash_history".
     //SIstema de archivos
-    let root_dir = null;    //Directorio raiz
+    let root_dir  = null;   //Directorio raiz
     let cur_path  = '';     //Ruta del directorio actual
-    let cur_dir = null;     //Directorio actual
-    
+    let cur_dir   = null;   //Directorio actual
+    let home_dir  = '';     //Directorio /home
     let err = '';           //Mensaje de error
     //Modos de trabajo del Shell
     const SM_LOGIN = 0;     //Modo esperando usuario
     const SM_PASSW = 1;     //Modo esperando contraseña
     const SM_COMMAND = 2;   //Modo esperando comando
     //Variables para secuencias de escape
-    let escape_mode = 0;        //Bandera para el modo escape: 
-                                //  0->Normal; 1->Escape mode
+    let escape_mode = 0;    //Bandera para el modo escape: 
+                            //  0->Normal; 1->Escape mode
     let ansi = new CAnsiEscape(executeSeq); //Lexer para secuencias ANSI.
     //Manejo de errores
     function clearStderr() {
@@ -74,10 +87,12 @@ function TitoShellEmul(response) {
     }
     //Funciones de archivo
     function expandFileNameIn(file_arr, fname, base_dir, hides) {
-        /* Expande un nombre de archivo (o carpeta) con comodines (cadena "fname"), y
-        agrega al arreglo "file_arr". Si el nombre de archivo "fname" incluye comodines,
-        expande la lista de acuerdo a los archivos que existan en el direct. "base_dir"
-        (que representa al directorio actual).
+        /* Expande un nombre de archivo o carpeta (cadena "fname"), y agrega las cadenas,
+        que resultan de la expansión, al arreglo de cadenas "file_arr".
+        La expansión de nombres tiene lugar, solo cuando "fname" incluye comodines (como
+        *.txt), de otra forma, la expansión solo producirá el mismo nombre "fname" en 
+        "file_arr". La expansión de nombres se realiza de acuerdo los archivos que 
+        existan en el directorio "base_dir" (que representa al directorio actual).
         La bandera "hides" indica si se deben incluir archivos ocultos.
         No se validan que todos los nombres devueltos existan como archivos o carpetas de
         "base_dir". */
@@ -188,6 +203,93 @@ function TitoShellEmul(response) {
         }
         return next_dir;
     }
+    function get_parent_from(path, base_dir) {
+        /* Similar a get_parent_from() pero devuelve un arreglo de dos valores:
+        - El elemento padre (Cfile) de "path".
+        - El nombre del archivo, extraído de path.
+        Si se produce algún error, devuelve [NULL, ''].
+        */
+        if (path.includes('/')) {  //Hay información de ruta (absoluta o relativa)
+            let dirs = path.split('/');
+            let fname = dirs.pop();  //Quita nombre de archivo
+            let parent_fil = get_file_from(dirs.join('/'), base_dir);
+            return [parent_fil, fname];
+        } else {  //Es solo nombre de archivo
+            return [base_dir, path];
+        }
+    }
+    function get_param(pars, flag, flag2) {
+        /* Quita una bandera o parámetro, como "-v" o "--help" del arreglo de parámetros
+        "pars". Si no encuentra "flag" o "flag2", devuelve false.
+        Ejemplo: 
+            let f_arc = get_param(pars, '-a', '--archive');
+        */
+        let pos = pars.indexOf(flag);
+        if (pos!=-1) {
+            pars.splice(pos,1); //Elimina
+            return true;
+        } else {  //No encontró "flag"
+            if (flag2=='') return false;
+            let pos2 = pars.indexOf(flag2);
+            if (pos2!=-1) {
+                pars.splice(pos2,1); //Elimina
+                return true;
+            } else {  //No encontró "flag" ni "flag2"
+                return false;
+            }
+        }
+    }
+    function get_par_val(pars, flag, flag2) {
+        /* Quita una bandera o parámetro, como "-f" o "--file=" del arreglo de parámetros
+        "pars". 
+        Si encuentra alguno de los parámetros, devuelve [true, <valor>], donde <valor> es
+        el valor que se encuentra despues de la bandera "flag" o "flag2"
+        Si no encuentra "flag" o "flag2", devuelve [false, ''].
+        Ejemplo: 
+            let [f_arc, name] = get_par_val(pars, '-f', '--file=');
+        */
+        for (let i = 1; i < pars.length; i++) {
+            let par_i = pars[i];
+            if (par_i.startsWith(flag)) {     //Encontró "flag"
+                if (par_i==flag) {    //Parámetro solo. El valor viene después.
+                    //El valor debe venir en el siguiente parámetro
+                    if (i+1 == pars.length) { //Estaba al final
+                        addError("option requires an argument -- '"+flag+"'");
+                        return [false, ''];
+                    }
+                    let value = pars[i+1];  //Toma siguiente parámetro
+                    pars.splice(i,1); //Elimina "flag"
+                    pars.splice(i,1); //Elimina valor
+                    return [true, value];
+                } else {    //El parámetro viene junto al valor
+                    let value = par_i.substring(flag.length);
+                    pars.splice(i,1); //Elimina "flag" y valor
+                    return [true, value];
+                }
+            } else {    //No encontró "flag"
+                if (flag2=='') continue;
+                if (par_i.startsWith(flag2)) {     //Encontró "flag2"
+                    if (par_i==flag2) {    //Parámetro solo. El valor viene después.
+                        //El valor debe venir en el siguiente parámetro
+                        if (i+1 == pars.length) { //Estaba al final
+                            addError("option requires an argument -- '"+flag2+"'");
+                            return [false, ''];
+                        }
+                        let value = pars[i+1];  //Toma siguiente parámetro
+                        pars.splice(i,1); //Elimina "flag"
+                        pars.splice(i,1); //Elimina valor
+                        return [true, value];
+                    } else {    //El parámetro viene junto al valor
+                        let value = par_i.substring(flag2.length);
+                        pars.splice(i,1); //Elimina "flag" y valor
+                        return [true, value];
+                    }
+                }
+            }
+        }
+        //No encontró "flag" ni "flag2"
+        return [false, ''];
+    }
     function validate_params(pars, fnames, perms) {
         /* Valida que los parámetros ingresados, en el arreglo "pars", estén en la lista
         de parámetros permitidos "perms" y extrae los nombres que no son parámetros en 
@@ -218,11 +320,11 @@ function TitoShellEmul(response) {
             return;
         }
         //Creamos el nuevo directorio
-        let new_dir = new Cfile(dir_name, 'drwxr-xr-x', log_user, log_group, 4096, base_dir);
+        let new_dir = new Cfile(dir_name, 'drwxr-xr-x', cur_user, cur_group, 4096, base_dir);
         //Creamos la entrada del directorio
         base_dir.dir[dir_name] = new_dir;
         //Crea los directorios del sistema
-        new_dir.dir['.']  =  new Cfile('.', 'drwxr-xr-x', log_user, log_group, 4096, new_dir);
+        new_dir.dir['.']  =  new Cfile('.', 'drwxr-xr-x', cur_user, cur_group, 4096, new_dir);
         new_dir.dir['..'] =  new Cfile('..','drwxr-xr-x', base_dir.owner, base_dir.group, 4096, new_dir);
         //Actualiza diccionario de directorios
         new_dir.dir['.'].dir  = new_dir.dir;
@@ -238,7 +340,7 @@ function TitoShellEmul(response) {
             return;
         }
         //Creamos el nuevo archivo
-        let new_fil = new Cfile(fil_name, '-rwxr-xr-x', log_user, log_group, content.length, base_dir);
+        let new_fil = new Cfile(fil_name, '-rwxr-xr-x', cur_user, cur_group, content.length, base_dir);
         new_fil.mdate = mdate;
         new_fil.content = content;
         //Creamos la entrada del directorio
@@ -258,6 +360,122 @@ function TitoShellEmul(response) {
         //Existe. Actualiza cur_path.
         cur_dir = new_dir;
         cur_path = get_path(cur_dir);
+    }
+    function do_cp(pars) {
+        /*Copia el(los) archivo(s) indicados a un destino. */
+        function copy_to_dir(file_arr, dest_dir, force, recurs) {
+            /* Copia los archivos indicados en "file_arr" al directorio destino. El
+            directorio debe existir.*/
+            for (const fname of file_arr) {
+                let fil = get_file_from(fname, cur_dir);
+                if (err!='') return;    //No se encontró
+                if (fil.isFile()) {  //Copia el archivo
+                    let newFile = structuredClone(fil); //Crea copia
+                    //Agrega copia al destino. No puede fallar aquí, así que no se necesita "force".
+                    dest_dir.dir[newFile.name] = newFile;   
+                } else {    //Copia de directorio a directorio
+                    if (recurs) {
+                        let newDir = structuredClone(fil); //Crea copia
+                        dest_dir.dir[newDir.name] = newDir;
+                    } else {
+                        addError("-r not specified; omitting directory '" + fname + "'");
+                        return;
+                    }
+                }
+            }
+        }
+        function copy_to_fil(fname, fname_dest, force) {
+            /* Copia el archivo indicado en "fname" al indicado en "fname_dest".*/
+            let fil = get_file_from(fname, cur_dir);
+            if (err!='') return;    //No se encontró
+            let [dest_dir, dest_name] = get_parent_from(fname_dest, cur_dir);
+            if (err!='') return;    //No se encontró la ruta
+            let newFile = structuredClone(fil); //Crea copia
+            newFile.name = dest_name;   //Cambia de nombre
+            //Agrega copia al destino.
+            //Si existe, lo sobreescribe. No puede fallar aquí, así que no se necesita "force".
+            dest_dir.dir[newFile.name] = newFile;
+        }
+        //Lee Banderas
+        let force   = get_param(pars, '-f', '--force');  //Fuerza sobreescritura
+        let tar_fil = get_param(pars, '-T', '--no-target-directory');  //Destino es archivo
+        let [tar_dir, dest] = get_par_val(pars, '-t', '--target-directory=');
+        let recurs  = get_param(pars, '-r', '--recursive');  //Copia recursiva de directorios
+        if (!recurs) {  //Busca por la otra opción de "-r".
+            recurs  = get_param(pars, '-R', '');  
+        }
+        if (err!='') return;
+        //Lee nombre de archivos
+        let fnames = [];    //Nombres de archivos (o carpetas) indicados.
+        let file_arr = [];  //Lista de archivos de entrada
+        validate_params(pars, fnames, ['a']);
+        if (err!='') return;
+        if (fnames.length==0) {   
+            addError("missing operand");
+            return;
+        }
+        if (!tar_dir && fnames.length==1) {
+            addError("missing destination file operand after '" + fnames[0] + "'");
+            return;
+        }
+        //Hasta este punto, debe haber al menos 2 parámetros de entrada
+        //Extrae destino
+        let end_slash = false;       //Indica si termina en '/'.
+        if (!tar_dir) {  //No se ha indicado al directorio destino.
+            //El destino debe ser el último parámetro
+            dest = fnames.pop();    //Extrae destino (Último nombre)
+            if (dest[dest.length-1] == '/') {   //Termina con "/"
+                end_slash = true;  
+                dest.slice(0, -1);  //Quita el '/'
+            }
+        }
+        //Hace la expansión de los nombres de archivos de origen
+        for (let i = 0; i < fnames.length; i++) {
+            expandFileNameIn(file_arr, fnames[i], cur_dir, false);   //Archivos que cumplen
+        }
+        //Identifica destino
+        const [parent, dest_name] = get_parent_from(dest, cur_dir);
+        if (err!='') return;    //La ruta está mal
+        if (dest_name in parent.dir) {  //Existe el archivo o directorio
+            let dest_file = parent.dir[dest_name];
+            if (dest_file.isDir()) {   //El destino es un directorio
+                //Se deben copiar todos los archivos al directorio
+                if (tar_fil) {  //Se indicó que era un archivo
+                    addError("cannot overwrite directory '" + dest + "' with non-directory");
+                    return;
+                }
+                //Se deben copiar al directorio existente
+                copy_to_dir(file_arr, dest_file, force, recurs);
+            } else {    //El destino es un archivo
+                if (end_slash) {    //Se indicó que era un directorio
+                    addError("failed to access '" + dest + "/': Not a directory");
+                    return;
+                }
+                if (tar_dir) {  //Se indicó que era un directorio
+                    addError("target '" + dest + "' is not a directory");
+                    return;
+                }
+                //Se debe sobreescribir el archivo
+                if (file_arr.length>1) {   //Hay más de un archivo, se supone que el destino debe ser un directorio
+                    addError("target '" + dest + "' is not a directory");
+                    return;
+                } else {    //Hay un solo archivo, consideramos que es copia con otro nombre
+                    copy_to_fil(file_arr[0], dest_name, force);
+                }
+            }
+        } else {    //No existe el destino como archivo o directorio
+            if (end_slash) {    //Se indicó que era un directorio
+                addError("cannot create regular file '"+ dest +"/': Not a directory");    
+                return;
+            }
+            //Debe ser un archivo. Lo copiamos a un archivo destino
+            if (file_arr.length>1) {   //Hay más de un archivo, se supone que el destino debe ser un directorio
+                addError("target '" + dest + "' is not a directory");
+                return;
+            } else {    //Hay un solo archivo, consideramos que es copia con otro nombre
+                copy_to_fil(file_arr[0], dest_name, force);
+            }
+        }
     }
     function do_echo(pars) {
         if (pars.length == 1) return;   //Sin parámetros
@@ -446,19 +664,19 @@ function TitoShellEmul(response) {
                 }
             }
         }
+        //Lee Banderas
+        let hides  = get_param(pars, '-a' , '--all');  //Archivos ocultos
+        let detail = get_param(pars, '-l' , '');  //Bandera de lista detallada
+        let dirfil = get_param(pars, '-d' , '--directory');  //Directorio como archivos
+        let sortmt = get_param(pars, '-t' , '');  //Ordenar por fecha de modificación
+        let sortmtR= get_param(pars, '-tr', '');  //Ordenar por fecha de modificación en reversa
+        let sorsiz = get_param(pars, '-S' , '');  //Ordenar por tamaño
+        let sorsizR= get_param(pars, '-Sr', '');  //Ordenar por tamaño en reversa
+        //Lee nombre de archivos
         let file_arr = [];  //Lista de archivos que cumplen
-        //Busca si se ha indicado nombre de archivo
         let fnames = [];    //Nombres de archivos (o carpetas) indicados.
-        validate_params(pars, fnames, ['a','v','l','d','t','tr','S','Sr']);
+        validate_params(pars, fnames, ['v']);   //Permite bandera "-v" pero la ignora
         if (err!='') return;
-        //Filtra lista de archivos por nombre
-        let hides = pars.includes('-a');   //Bandera de archivos ocultos
-        let detail = pars.includes('-l');  //Bandera de lista detallada
-        let dirfil = pars.includes('-d');  //Directorio como archivos
-        let sortmt = pars.includes('-t');  //Ordenar por fecha de modificación
-        let sortmtR = pars.includes('-tr');  //Ordenar por fecha de modificación en reversa
-        let sorsiz = pars.includes('-S');  //Ordenar por tamaño
-        let sorsizR = pars.includes('-Sr');  //Ordenar por tamaño en reversa
         if (fnames.length==0) fnames.push('.');    //No se ha indicado nombres. Se asume ".".
         //Hace la expansión de los nombres de archivos proporcionados
         for (let i = 0; i < fnames.length; i++) {
@@ -486,6 +704,7 @@ function TitoShellEmul(response) {
                 //Lista directorios
                 for (const dname of dirs) {
                     response(dname.name + ":\n");
+                    files = [];
                     addAllNamesIn(files, hides, dname.dir);
                     list_files(files, detail, sortmt, sortmtR, sorsiz, sorsizR);
                 }
@@ -497,7 +716,7 @@ function TitoShellEmul(response) {
         validate_params(pars, fnames, []);
         if (err!='') return;
         //Muestra usuario
-        response(log_user + "\n");
+        response(cur_user + "\n");
     }
     function do_hostname(pars) {
         let fnames = [];    //Nombres de archivos (o carpetas) indicados.
@@ -525,24 +744,65 @@ function TitoShellEmul(response) {
         response("pwd\n");
         response("whoami\n");
     }
+    function create_user(name, pwd, group, home_path) {
+        /* Crea un nuevo usuario. El parámetro "home_path" es el directorio "home" del
+        usuario. Si no se especifica, se le crea un directorio en el directorio /home */
+        let user =  new Cuser(name, pwd, group);
+        user_list[name] = user;
+        if (home_path=='') {    //Hay que crearle su directorio home
+            /*Cambiamos los valores de "cur_user" y "cur_group" para que los directorios 
+            del usuario se creen con su propio usuario*/
+            let tmp_user  = cur_user;
+            let tmp_grp   = cur_group;
+            cur_user  = name;
+            cur_group = group;
+            //Crea directorio 'home':
+            let user_dir = mkdir(home_dir, name);
+            if (err!='') return;
+            user.home_path = get_path(user_dir);
+            //Crea archivo de historial
+            user.hist_file = mkfile(user_dir, ".bash_history"   , new Date(), "");
+            //Crea directorios del usuario
+            mkdir(user_dir, 'Desktop');
+            mkdir(user_dir, 'Documents');
+            mkdir(user_dir, 'Downloads');
+            mkdir(user_dir, 'Music');
+            mkdir(user_dir, 'Pictures');
+            mkdir(user_dir, 'Public');
+            mkdir(user_dir, 'Videos');
+            //Directorios para pruebas
+            mkdir(user_dir, 'destino');
+            mkfile(user_dir, "a.txt"           , new Date("2024/01/28 01:20:00"), "Hola");
+            mkfile(user_dir, "b.txt"           , new Date("2024/01/27 05:00:00"), "Hola mundo");  
+            //Restaura usuario
+            cur_user  = tmp_user;
+            cur_group = tmp_grp ;
+        } else {    //Solo le asignamos su "home"
+            user.home_path = home_path;
+            let user_dir = get_file_from(home_path, root_dir);
+            if (err!='') return;
+            //Crea archivo de historial
+            user.hist_file = mkfile(user_dir, ".bash_history"   , new Date(), "");
+        }
+    }
     function init_filesystem() {
         //Crea la raiz
         root_dir = new Cfile('/', 'drwxr-xr-x', 'root', 'root', 4096, null);
-        //Inicia creación de directorios
-        log_user = 'root';
-        log_group = 'root';
+        //Define usuario para la creación del sistema de archivos
+        cur_user = 'root';
+        cur_group = 'root';
         cur_path = "";  //Directorio raiz
         cur_dir = root_dir;
         //Crea directorios del sistema
-        cur_dir.dir['.']  =  new Cfile('.', 'drwxr-xr-x', log_user, log_group, 4096, cur_dir);
-        cur_dir.dir['..'] =  new Cfile('..','drwxr-xr-x', log_user, log_group, 4096, cur_dir);
+        cur_dir.dir['.']  =  new Cfile('.', 'drwxr-xr-x', cur_user, cur_group, 4096, cur_dir);
+        cur_dir.dir['..'] =  new Cfile('..','drwxr-xr-x', cur_user, cur_group, 4096, cur_dir);
         cur_dir.dir['.'].dir  = cur_dir.dir;    //Actualiza diccionario de directorios
         cur_dir.dir['..'].dir = cur_dir.dir;    //Actualiza diccionario de directorios
         mkdir(cur_dir, "bin");
         mkdir(cur_dir, "dev");  
-        mkdir(cur_dir, "etc");  
-        let home_dir = mkdir(cur_dir, 'home');
-        mkdir(home_dir, 'root');    //Directorio /home/root
+        mkdir(cur_dir, "etc");
+        //Directorio "home"
+        home_dir = mkdir(cur_dir, 'home');
 
         mkdir(cur_dir, "lib");  
         mkdir(cur_dir, "root");
@@ -551,25 +811,11 @@ function TitoShellEmul(response) {
         mkfile(cur_dir, "aaa.txt"         , new Date("2024/01/28 01:20:00"), "Hola");
         mkfile(cur_dir, "bbb.txt"         , new Date("2024/01/27 05:00:00"), "Hola mundo");  
         mkfile(cur_dir, "nombre_algo_largo",new Date("2024/10/13 01:30:00"), "a");  
-        mkfile(cur_dir, "test.txt"        , new Date("2023/10/27 01:05:00"), "Hola mundo");  
-        //Crea carpeta de usuario
-        log_user = 'user';
-        log_group = 'user';
-        let user_dir = mkdir(home_dir, 'user');
-        mkdir(user_dir, 'Desktop');
-        mkdir(user_dir, 'Documents');
-        mkdir(user_dir, 'Downloads');
-        mkdir(user_dir, 'Music');
-        mkdir(user_dir, 'Pictures');
-        mkdir(user_dir, 'Public');
-        mkdir(user_dir, 'Videos');
-        mkfile(user_dir, "a.txt"           , new Date("2024/01/28 01:20:00"), "Hola");
-        mkfile(user_dir, "b.txt"           , new Date("2024/01/27 05:00:00"), "Hola mundo");  
     }
     //Procesamiento de entrada
     function sendPrompt() {
         /* Muestra el prompt por el terminal */
-        let tmp = prompt.replace('\\u', log_user)
+        let tmp = prompt.replace('\\u', cur_user)
         .replace('\\h', hostname)
         .replace('\\W', cur_path);
         response(tmp);
@@ -610,10 +856,23 @@ function TitoShellEmul(response) {
             return command.match(regex).map(token => token.replace(/(^"|"$)/g, '')); 
         }
     }
+    function login_user(user_name) {
+        /* Inicia la sesión con el usuario indicado */
+        cur_user = user_name;
+        modeShell=SM_COMMAND;       //Pasa a modo comando
+        let user = user_list[user_name];
+        cur_group = user.group;     //Actualiza grupo
+        do_cd(['', user.home_path]);  //Accede al home
+        //Inicializa archivo de historial
+        cur_hist = user.hist_file;
+        let last_login =  user.last_login.toGMTString(); 
+        response('Last login: ' + last_login + " from tty1\n");
+        sendPrompt();
+    }
     function processEnter() {
         /* Procesa la tecla <Enter>. Normalmente será para la ejecución de un comando. */
         if (modeShell==SM_LOGIN) {
-            log_user = curCommand;
+            cur_user = curCommand;
             //Pasa a modo contraseña
             curCommand = '';
             curXpos = 0;
@@ -621,15 +880,9 @@ function TitoShellEmul(response) {
             response('Password: ');
         } else if (modeShell==SM_PASSW) {
             //Valida la contraseña
-            log_pass = curCommand; 
-            if (log_user in user_list && log_pass==user_list[log_user][0]) {
-                //Pasa a modo comando
-                modeShell=SM_COMMAND;
-                log_group = user_list[log_user][1];     //Lee grupo
-                do_cd(['','/home/'+log_user]);
-                let last_login = new Date().toGMTString(); 
-                response('Last login: ' + last_login + " from tty1\n");
-                sendPrompt();
+            cur_pass = curCommand; 
+            if (cur_user in user_list && cur_pass==user_list[cur_user].pwd) {
+                login_user(cur_user);
             } else {
                 response("Login incorrect.\n\n");
                 modeShell = SM_LOGIN;   //Modo de inicio de sesión
@@ -652,6 +905,8 @@ function TitoShellEmul(response) {
                 do_ls(pars);
             } else if (command=='cd') {
                 do_cd(pars);
+            } else if (command=='cp') {
+                do_cp(pars);
             } else if (command=='echo') {
                 do_echo(pars);
             } else if (command=='mkdir') {
@@ -721,12 +976,6 @@ function TitoShellEmul(response) {
          sesión */
         curCommand = "";
         curXpos = 0;
-        //Cre grupos
-        group_list['root'] = 'root';  //Crea un grupo
-        group_list['user'] = 'user';  //Crea un grupo
-        //Crea usuarios
-        user_list['root'] = ['root', 'root'];     //[clave, grupo]
-        user_list['user'] = ['user', 'user'];     //[clave, grupo]
         //Mensaje de saludo
         response("\n");
         response("Titux OS System. Javascript Linux Emulator.\n");
@@ -740,11 +989,17 @@ function TitoShellEmul(response) {
 //        response("\x1B[u");
         //////////////////////////////////////////////////////////
         init_filesystem();
-        modeShell = SM_LOGIN;   //Modo de inicio de sesión
+        //Crea grupos
+        group_list['root'] = 'root';  //Crea un grupo
+        group_list['user'] = 'user';  //Crea un grupo
+        //Crea usuarios
+        create_user('root', 'root', 'root', '/root');
+        if (err!='') sendStderror('');
+        create_user('user', 'user', 'user', '');
+        if (err!='') sendStderror('');
 
-//        modeShell = SM_COMMAND;   //Modo de comandos
-//        log_user = 'root';
-//        log_group = 'root';
+        modeShell = SM_LOGIN;   //Modo de inicio de sesión
+        //login_user('root');
 
         response("\x1B[0m");    //Restaura atributos
         response('Login: ');
