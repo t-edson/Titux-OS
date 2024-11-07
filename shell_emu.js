@@ -32,7 +32,7 @@ class Cfile {
         return (this.parent == null);
     }
 }
-/* Clase que define a un usaurio */
+/* Clase que define a un usuario */
 class Cuser {
     constructor(name, pwd, group) {
         this.name   = name;     //Nombre del usuario
@@ -493,16 +493,15 @@ function TitoShellEmul(response) {
     }
     function do_mkdir(pars) {
         /* Crea un directorio en el directorio actual o en el indicado. */
+        //Lee Banderas y valida parámetros
+        let verb = get_param(pars, '-v', '--verbose');
         let fnames = [];    //Nombres de archivos (o carpetas) indicados.
-        validate_params(pars, fnames, ['v']);
+        validate_params(pars, fnames, []);
         if (err!='') return;
         if (fnames.length==0) {   
             addError("missing operand");
             return;
         }
-        //Banderas
-        let verb = pars.includes('-v');   //Bandera de archivos ocultos
-
         //Crea los diectorios indicados
         for (const dirname of fnames) {
             let abspath = expand_rel_path(cur_path, dirname);
@@ -522,16 +521,15 @@ function TitoShellEmul(response) {
     }
     function do_rmdir(pars) {
         /* Elimina un directorio en el directorio actual o en el indicado. */
+        //Lee Banderas y valida parámetros
+        let verb = get_param(pars, '-v', '--verbose'); 
         let fnames = [];    //Nombres de archivos (o carpetas) indicados.
-        validate_params(pars, fnames, ['v']);
+        validate_params(pars, fnames, []);
         if (err!='') return;
         if (fnames.length==0) {   
             addError("missing operand");
             return;
         }
-        //Banderas
-        let verb = pars.includes('-v');   //Bandera de archivos ocultos
-        
         //Elimina los diectorios indicados
         for (const dirname of fnames) {
             let abspath = expand_rel_path(cur_path, dirname);
