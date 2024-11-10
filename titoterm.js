@@ -710,6 +710,7 @@ function TitoTerm(idCanvas, txtReceived) {
         ejecuten alguna acción no deseada. */
         if (event.code === 'Space') event.preventDefault();
         if (event.code === 'Tab') event.preventDefault();
+        if (event.key =='Backspace') event.preventDefault();
         if (event.key =='ArrowLeft') event.preventDefault();
         if (event.key =='ArrowRight') event.preventDefault();
         if (event.key =='ArrowDown') event.preventDefault();
@@ -735,6 +736,11 @@ function TitoTerm(idCanvas, txtReceived) {
         let cod = event.key.charCodeAt(0);
         if (event.ctrlKey) {
             //Teclas con <Ctrl>.
+            if (event.key === 'v' || event.key === 'V') {   //Pegar
+                //No se puede leer del Portapapeles por seguridad.
+                //let txt = navigator.clipboard.readText();
+                //txtReceived(txt);
+            }
             return;
         } else if (event.altKey) {
             //Teclas con <Alt>.
@@ -742,7 +748,8 @@ function TitoTerm(idCanvas, txtReceived) {
 //        } else if (event.shiftKey) {
 //            //Teclas con <Shift>.
 //            return;
-        } else if (event.key=='Shift') {return;
+        } else if (event.key=='Shift') {
+            return;
         } else if (event.key=='CapsLock') {return;
         } else if (event.key=='NumLock') {return;
         } else if (event.key=='PageUp') {return;

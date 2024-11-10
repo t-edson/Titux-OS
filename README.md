@@ -11,6 +11,7 @@ This emulator is written entirely in Javascript and, after downloading the websi
 At the moment, only a few commands are implemented:
 
 * cd [dir name]
+* cp [-T][-r][-t <dest>] <source> <dest>
 * date
 * echo [-n] [arg ...]
 * help
@@ -46,3 +47,4 @@ The first two implement the terminal with support for ANSI sequences. These file
 
 The complete shell emulator is in the "shell_emu.js" file.
 
+To test the simulator, you can open the test_shell.html page and log as root/root or user/user.

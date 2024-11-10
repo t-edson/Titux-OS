@@ -776,6 +776,7 @@ function TitoShellEmul(response) {
         response("Only a few commands are implemented:\n");
         response("\n");
         response("cd [dir name]\n");
+        response("cp [-T][-r][-t <dest>] <source> <dest>\n");
         response("date\n");
         response("echo [-n] [arg ...]\n");
         response("help\n");
@@ -815,10 +816,10 @@ function TitoShellEmul(response) {
             //Directorios para pruebas
             mkfile(user_dir, "a.txt"           , new Date("2024/01/28 01:20:00"), "Hola");
             mkfile(user_dir, "b.txt"           , new Date("2024/01/27 05:00:00"), "Hola mundo");  
-            let orig = mkdir(user_dir, 'origen');
-            mkfile(orig, "a.txt", new Date(), "Hola");
-            mkfile(orig, "b.txt", new Date(), "Hola");
-            mkdir(user_dir, 'destino');
+            //let orig = mkdir(user_dir, 'origen');
+            //mkfile(orig, "a.txt", new Date(), "Hola");
+            //mkfile(orig, "b.txt", new Date(), "Hola");
+            //mkdir(user_dir, 'destino');
             //Restaura usuario
             cur_user  = tmp_user;
             cur_group = tmp_grp ;
@@ -1077,12 +1078,12 @@ function TitoShellEmul(response) {
         //Crea usuarios
         create_user('root', 'root', 'root', '/root');
         if (err!='') sendStderror('');
-        //create_user('user', 'user', 'user', '');
-        //if (err!='') sendStderror('');
+        create_user('user', 'user', 'user', '');
+        if (err!='') sendStderror('');
 
-        //modeShell = SM_LOGIN;   //Modo de inicio de sesión
-        create_user('usuario', 'user', 'user', '');
-        login_user('usuario');
+        modeShell = SM_LOGIN;   //Modo de inicio de sesión
+        //create_user('usuario', 'user', 'user', '');
+        //login_user('usuario');
 
         response("\x1B[0m");    //Restaura atributos
         response('Login: ');
