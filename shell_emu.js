@@ -31,6 +31,37 @@ class Cfile {
     isRoot() {
         return (this.parent == null);
     }
+    mksystemdir() {
+        /** Crea los directorios del sistema "." Y "..". 
+         * Los directorios del sistema se crean con el mismo propietario y grupo que el
+         * objeto actual.
+         */
+        //Crea los directorios
+        this.dir['.']  = new Cfile('.', 'drwxr-xr-x', this.owner, this.group, 4096, this);
+        this.dir['..'] = new Cfile('..','drwxr-xr-x', this.parent.owner, this.parent.group, 4096, this);
+        //Actualiza diccionario las referencais de los directorios
+        this.dir['.'].dir  = this.dir;
+        this.dir['..'].dir = this.parent.dir;
+    }
+    copy(newParent) {   //Devuelve una copia del archivo o directorio
+        const copia = new Cfile(this.name, this.perm, this.owner, this.group, this.size,
+                                newParent);
+        //Copia campos adicionales
+        copia.links = this.links;
+        copia.mdate = new Date(this.mdate); //Copia de la fecha
+        copia.content = this.content;
+        //Copia lista de archivos
+        for (const fil_name in this.dir) {
+            if (fil_name == '.') {
+                (copia.mksystemdir());
+            } else if (fil_name == '..') {
+                
+            } else {
+                copia.dir[fil_name] = this.dir[fil_name].copy(copia);
+            }
+        }
+        return copia;
+    }
 }
 /* Clase que define a un usuario */
 class Cuser {
@@ -40,23 +71,25 @@ class Cuser {
         this.group  = group;    //Grupo al que pertenece
         this.home_path = '';    //Directorio home de usuario
         this.last_login = new Date();   //Último inicio de sesión
-        this.hist_file = '';    //Archivo de historial
+        this.hist_file = null;  //Archivo de historial (Cfile)
     }
 }
 /* Clase principal que define al shell */
 function TitoShellEmul(response) {
     let curCommand = "";    //Comando actual
+    let curCommand_tmp = "";//Respaldo del comando actual
     let curXpos   = 0;      //Posición actual del cursor con respecto al comando actual
     let modeShell = 0;      //Modo de trabajo del shell
     let hostname  = 'pc';   //Nombre del equipo
     let prompt    = '[\\u@\\h \\W]\$ ';
+    let hist_idx  = 0;      //Índice al historial de comandos
     let user_list = [];     //Lista de usuarios
     let group_list = [];    //Lista de grupos
     //Datos de usuario
     let cur_user  = '';     //Usuario actual
     let cur_pass  = '';     //Contraseña
     let cur_group = '';     //Grupo actual
-    let cur_hist  = null;   //Archivo de historial actual: ".bash_history".
+    let cur_hist  = null;   //Cfile del archivo de historial actual: ".bash_history".
     //SIstema de archivos
     let root_dir  = null;   //Directorio raiz
     let cur_path  = '';     //Ruta del directorio actual
@@ -324,16 +357,12 @@ function TitoShellEmul(response) {
         //Creamos la entrada del directorio
         base_dir.dir[dir_name] = new_dir;
         //Crea los directorios del sistema
-        new_dir.dir['.']  =  new Cfile('.', 'drwxr-xr-x', cur_user, cur_group, 4096, new_dir);
-        new_dir.dir['..'] =  new Cfile('..','drwxr-xr-x', base_dir.owner, base_dir.group, 4096, new_dir);
-        //Actualiza diccionario de directorios
-        new_dir.dir['.'].dir  = new_dir.dir;
-        new_dir.dir['..'].dir = base_dir.dir;
+        new_dir.mksystemdir();
         return new_dir;
     }
     function mkfile(base_dir, fil_name, mdate, content) {
         /* Crea un nuevo directorio, en el directorio indicado (base_fil). Devuelve la 
-        referencia al archivo creado. */
+        referencia al archivo "Cfile" creado. */
         //Verifica si existe ya el nombre.
         if (fil_name in base_dir.dir) {
             addError("Cannot create file '" + fil_name + "': File exists");
@@ -361,6 +390,21 @@ function TitoShellEmul(response) {
         cur_dir = new_dir;
         cur_path = get_path(cur_dir);
     }
+    function do_cat(pars) {
+        /** Muestra el contenido del archivo indicado
+         * 
+         */
+        if (pars.length==1) return;  //Sin parámetros
+        let path = pars[1]; 
+        let fil = get_file_from(path, cur_dir);
+        if (err != '') return;
+        if (fil.isDir()) {  //Terminó en un archivo
+            addError(new_dir.name + ": Not a file");
+            return;
+        }
+        //Existe. Actualiza cur_path.
+        response(fil.content + "\n");
+    }
     function do_cp(pars) {
         /*Copia el(los) archivo(s) indicados a un destino. */
         function copy_to_dir(file_arr, dest_dir, force, recurs) {
@@ -370,12 +414,12 @@ function TitoShellEmul(response) {
                 let fil = get_file_from(fname, cur_dir);
                 if (err!='') return;    //No se encontró
                 if (fil.isFile()) {  //Copia el archivo
-                    let newFile = structuredClone(fil); //Crea copia
+                    let newFile = fil.copy(dest_dir); //Crea copia
                     //Agrega copia al destino. No puede fallar aquí, así que no se necesita "force".
                     dest_dir.dir[newFile.name] = newFile;   
                 } else {    //Copia de directorio a directorio
                     if (recurs) {
-                        let newDir = structuredClone(fil); //Crea copia
+                        let newDir = fil.copy(dest_dir); //Crea copia
                         dest_dir.dir[newDir.name] = newDir;
                     } else {
                         addError("-r not specified; omitting directory '" + fname + "'");
@@ -390,7 +434,7 @@ function TitoShellEmul(response) {
             if (err!='') return;    //No se encontró
             let [dest_dir, dest_name] = get_parent_from(fname_dest, cur_dir);
             if (err!='') return;    //No se encontró la ruta
-            let newFile = structuredClone(fil); //Crea copia
+            let newFile = fil.copy(dest_dir); //Crea copia
             newFile.name = dest_name;   //Cambia de nombre
             //Agrega copia al destino.
             //Si existe, lo sobreescribe. No puede fallar aquí, así que no se necesita "force".
@@ -769,9 +813,12 @@ function TitoShellEmul(response) {
             mkdir(user_dir, 'Public');
             mkdir(user_dir, 'Videos');
             //Directorios para pruebas
-            mkdir(user_dir, 'destino');
             mkfile(user_dir, "a.txt"           , new Date("2024/01/28 01:20:00"), "Hola");
             mkfile(user_dir, "b.txt"           , new Date("2024/01/27 05:00:00"), "Hola mundo");  
+            let orig = mkdir(user_dir, 'origen');
+            mkfile(orig, "a.txt", new Date(), "Hola");
+            mkfile(orig, "b.txt", new Date(), "Hola");
+            mkdir(user_dir, 'destino');
             //Restaura usuario
             cur_user  = tmp_user;
             cur_group = tmp_grp ;
@@ -833,6 +880,37 @@ function TitoShellEmul(response) {
                 if (curXpos < curCommand.length) {
                     curXpos++;  //Avanzamos
                     response(escape_seq);   //Movemos cursor en el terminal
+                }
+            } else if (escape_seq == "\x1B[A") {      //Direccional arriba
+                if (cur_hist.content!='') {
+                    let hist = cur_hist.content.split('\n');
+                    let ncomms = hist.length;
+                    //Se pide cargar comando anterior
+                    if (hist_idx==0) {  //Guardamos lo que está en edición
+                        curCommand_tmp = curCommand;
+                    }
+                    hist_idx++; //Retrocede en el historial
+                    if (hist_idx > ncomms) hist_idx = ncomms;
+                    let last_comm = hist[ncomms - hist_idx];
+                    curCommand = last_comm;
+                    response(last_comm);
+                }
+            } else if (escape_seq == "\x1B[B") {      //Direccional abajo
+                if (cur_hist.content!='') {
+                    let hist = cur_hist.content.split('\n');
+                    let ncomms = hist.length;
+                    let last_comm='';
+                    //Se pide cargar comando anterior
+                    if (hist_idx > 0) {
+                        hist_idx--; //Retrocede en el historial
+                        if (hist_idx==0) {
+                            last_comm = curCommand_tmp;
+                        } else {
+                            last_comm = hist[ncomms - hist_idx];
+                        }
+                        curCommand = last_comm;
+                        response(last_comm);
+                    }
                 }
             } else {
                 console.log("Secuencia CSI no identificada en el shell: " + escape_seq);
@@ -903,6 +981,8 @@ function TitoShellEmul(response) {
                 do_ls(pars);
             } else if (command=='cd') {
                 do_cd(pars);
+            } else if (command=='cat') {
+                do_cat(pars);
             } else if (command=='cp') {
                 do_cp(pars);
             } else if (command=='echo') {
@@ -921,6 +1001,16 @@ function TitoShellEmul(response) {
                 addError("Command not found");
             }
             if (err!="") sendStderror(command);
+            //Escribe comando en el historial
+            if (command !='') {
+                if (cur_hist.content=='') {
+                    cur_hist.content = curCommand;
+                } else {
+                    cur_hist.content += "\n" + curCommand;
+                }
+            }
+            hist_idx = 0;   //Reinicia índice de comandos
+            //Prepara siguiente comando
             curCommand = '';
             curXpos = 0;
             sendPrompt();
@@ -979,13 +1069,7 @@ function TitoShellEmul(response) {
         response("Titux OS System. Javascript Linux Emulator.\n");
         response("Kernel 0.0.3-Educational-version.\n");
         response("\n");
-        ////////////// Prueba de control de pantalla //////////////
-//        response("\x1B[5;5fTexto en (5,5)");
-//        response("\x1B[5;14f");
-//        response("\x1B[1J");
-//        response("\x1B[s");
-//        response("\x1B[u");
-        //////////////////////////////////////////////////////////
+        //Crea el sistema de archivos
         init_filesystem();
         //Crea grupos
         group_list['root'] = 'root';  //Crea un grupo
@@ -993,11 +1077,12 @@ function TitoShellEmul(response) {
         //Crea usuarios
         create_user('root', 'root', 'root', '/root');
         if (err!='') sendStderror('');
-        create_user('user', 'user', 'user', '');
-        if (err!='') sendStderror('');
+        //create_user('user', 'user', 'user', '');
+        //if (err!='') sendStderror('');
 
-        modeShell = SM_LOGIN;   //Modo de inicio de sesión
-        //login_user('root');
+        //modeShell = SM_LOGIN;   //Modo de inicio de sesión
+        create_user('usuario', 'user', 'user', '');
+        login_user('usuario');
 
         response("\x1B[0m");    //Restaura atributos
         response('Login: ');
