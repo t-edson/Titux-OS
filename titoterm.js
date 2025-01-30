@@ -3,8 +3,8 @@
 "use strict";
 ///////// Constantes globales
 //const textcolor = "rgb(0,240,0)";  //Color de texto
-const TEXT_COLOR = "#00E800";       //Color de texto
-const BACK_COLOR = "#000000";       //Color de fondo
+let TEXT_COLOR = "#00E800";       //Color de texto
+let BACK_COLOR = "#000000";       //Color de fondo
 const FONT_NORMAL = "14px monospace";   //Estilo de texto
 //Definición de la clase por su constructor
 function TitoTerm(idCanvas, txtReceived) {
@@ -453,7 +453,7 @@ function TitoTerm(idCanvas, txtReceived) {
         nueva secuencia */
         if (escape_type == ESC_UND) {     //Secuencia no identificada
             console.log("Secuencia no identificada");
-        } else if (escape_type == ESC_CSI) {  //Secuencias "CSI"
+        } else if (escape_type == ESC_CSI) {  //Secuencias "CSI": "ESC ["
             let delim = escape_seq.substr(-1); 
             if (escape_seq == "\x1B[P") {      //Eliminar caracter a la izquierda
                 cursor_left();
@@ -542,6 +542,7 @@ function TitoTerm(idCanvas, txtReceived) {
                     }
                 } else {    //Borra toda la pantalla
                     clearBuffer();
+                    scrolled = true;    //Marca bandera para forzar a redibujar
                 };
             } else if (delim == "K") {   //Borra línea: ESC[<n>K
                 let comstr = escape_seq.substr(2, escape_seq.length-3);
@@ -736,12 +737,17 @@ function TitoTerm(idCanvas, txtReceived) {
         let cod = event.key.charCodeAt(0);
         if (event.ctrlKey) {
             //Teclas con <Ctrl>.
-            if (event.key === 'v' || event.key === 'V') {   //Pegar
+            
+            if (event.key === 'c' || event.key === 'C') {   //Ctrl-C
+                strrec = "\x03" //Código usado para estas teclas
+            } else if (event.key === 'v' || event.key === 'V') {   //Pegar
                 //No se puede leer del Portapapeles por seguridad.
                 //let txt = navigator.clipboard.readText();
                 //txtReceived(txt);
+                return;
+            } else {
+                return;
             }
-            return;
         } else if (event.altKey) {
             //Teclas con <Alt>.
             return;

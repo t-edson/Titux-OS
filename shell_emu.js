@@ -4,9 +4,9 @@ Referencias:
 https://www.fpgenred.es/GNU-Linux/expansin_del_shell.html
 */
 "use strict";
-/* Clase que define a un archivo o carpeta. Todos los archivos o carpetas se representan
-como uno de estos objetos. Las carpetas usan el contenedor "this.dir" como un diccionario
-de objetos Cfile. */
+/* Clase que define a un archivo o directorio. Todos los archivos o directorio se 
+representan como uno de estos objetos. Los directorios usan el contenedor "this.dir" como
+un diccionario de objetos Cfile, en donde se gaurdan los elementos del directorio. */
 class Cfile {
     perm  = '-rwxrwxrwx';
     links = 1;
@@ -17,7 +17,8 @@ class Cfile {
         this.owner  = owner;        //Propietario del archivo
         this.group  = group;        //Grupo al que pertenece
         this.size   = size;         //Tamaño del archivo en bytes
-        this.mdate  = new Date();   //Fecha y hora de la última modificación
+        this.mdate  = new Date();   //Fecha-hora de la última modificación
+        this.adate  = new Date();   //Fecha-hora de acceso
         this.content= '';           //Contenido del archivo, cuando es un archivo
         this.dir    = [];           //Lista de archivos cuando es una carpeta
         this.parent = parent;       //Directorio padre (objeto Cfile)
@@ -49,6 +50,7 @@ class Cfile {
         //Copia campos adicionales
         copia.links = this.links;
         copia.mdate = new Date(this.mdate); //Copia de la fecha
+        copia.adate = new Date(this.adate); //Copia de la fecha
         copia.content = this.content;
         //Copia lista de archivos
         for (const fil_name in this.dir) {
@@ -117,6 +119,100 @@ function TitoShellEmul(response) {
     function sendStderror(command) {
         //Muestra el mensaje por el terminal
         response(command + ": " + err + "\n");        
+    }
+    //Manejo de parámetros
+    function get_param(pars, flag, flag2) {
+        /* Quita una bandera o parámetro, como "-v" o "--help" del arreglo de parámetros
+        "pars". Si no encuentra "flag" o "flag2", devuelve false.
+        Ejemplo: 
+            let f_arc = get_param(pars, '-a', '--archive');
+        */
+        let pos = pars.indexOf(flag);
+        if (pos!=-1) {
+            pars.splice(pos,1); //Elimina
+            return true;
+        } else {  //No encontró "flag"
+            if (flag2=='') return false;
+            let pos2 = pars.indexOf(flag2);
+            if (pos2!=-1) {
+                pars.splice(pos2,1); //Elimina
+                return true;
+            } else {  //No encontró "flag" ni "flag2"
+                return false;
+            }
+        }
+    }
+    function get_par_val(pars, flag, flag2) {
+        /* Quita una bandera o parámetro, como "-f" o "--file=" del arreglo de parámetros
+        "pars". 
+        Si encuentra alguno de los parámetros, devuelve [true, <valor>], donde <valor> es
+        el valor que se encuentra despues de la bandera "flag" o "flag2"
+        Si no encuentra "flag" o "flag2", devuelve [false, ''].
+        Ejemplo: 
+            let [f_arc, name] = get_par_val(pars, '-f', '--file=');
+        */
+        for (let i = 1; i < pars.length; i++) {
+            let par_i = pars[i];
+            if (par_i.startsWith(flag)) {     //Encontró "flag"
+                if (par_i==flag) {    //Parámetro solo. El valor viene después.
+                    //El valor debe venir en el siguiente parámetro
+                    if (i+1 == pars.length) { //Estaba al final
+                        addError("option requires an argument -- '"+flag+"'");
+                        return [false, ''];
+                    }
+                    let value = pars[i+1];  //Toma siguiente parámetro
+                    pars.splice(i,1); //Elimina "flag"
+                    pars.splice(i,1); //Elimina valor
+                    return [true, value];
+                } else {    //El parámetro viene junto al valor
+                    let value = par_i.substring(flag.length);
+                    pars.splice(i,1); //Elimina "flag" y valor
+                    return [true, value];
+                }
+            } else {    //No encontró "flag"
+                if (flag2=='') continue;
+                if (par_i.startsWith(flag2)) {     //Encontró "flag2"
+                    if (par_i==flag2) {    //Parámetro solo. El valor viene después.
+                        //El valor debe venir en el siguiente parámetro
+                        if (i+1 == pars.length) { //Estaba al final
+                            addError("option requires an argument -- '"+flag2+"'");
+                            return [false, ''];
+                        }
+                        let value = pars[i+1];  //Toma siguiente parámetro
+                        pars.splice(i,1); //Elimina "flag"
+                        pars.splice(i,1); //Elimina valor
+                        return [true, value];
+                    } else {    //El parámetro viene junto al valor
+                        let value = par_i.substring(flag2.length);
+                        pars.splice(i,1); //Elimina "flag" y valor
+                        return [true, value];
+                    }
+                }
+            }
+        }
+        //No encontró "flag" ni "flag2"
+        return [false, ''];
+    }
+    function validate_params(pars, fnames, perms) {
+        /* Valida que los parámetros ingresados, en el arreglo "pars", estén en la lista
+        de parámetros permitidos "perms" y extrae los nombres que no son parámetros en 
+        "fnames". Si no se reconoce un parámetro, se genera un error.
+        Los parámetros se reconocen porque empiezan con "-"
+        */
+        for (let i = 1; i < pars.length; i++) { //No considera nombre del comando
+            let par = pars[i];  //Parámetro
+            if (par[0]=='-') {
+                par = par.slice(1);   //quita "-"
+                if (perms.includes(par)) {
+                    //verb = true; OK
+                } else {
+                    addError("invalid option -- '" + par + "'");
+                    return;
+                }
+            } else {
+                fnames.push(par);  //Agrega nombre
+            }
+       }
     }
     //Funciones de archivo
     function expandFileNameIn(file_arr, fname, base_dir, hides) {
@@ -237,7 +333,7 @@ function TitoShellEmul(response) {
         return next_dir;
     }
     function get_parent_from(path, base_dir) {
-        /* Similar a get_parent_from() pero devuelve un arreglo de dos valores:
+        /* Similar a get_file_from() pero devuelve un arreglo de dos valores:
         - El elemento padre (Cfile) de "path".
         - El nombre del archivo, extraído de path.
         Si se produce algún error, devuelve [NULL, ''].
@@ -250,99 +346,6 @@ function TitoShellEmul(response) {
         } else {  //Es solo nombre de archivo
             return [base_dir, path];
         }
-    }
-    function get_param(pars, flag, flag2) {
-        /* Quita una bandera o parámetro, como "-v" o "--help" del arreglo de parámetros
-        "pars". Si no encuentra "flag" o "flag2", devuelve false.
-        Ejemplo: 
-            let f_arc = get_param(pars, '-a', '--archive');
-        */
-        let pos = pars.indexOf(flag);
-        if (pos!=-1) {
-            pars.splice(pos,1); //Elimina
-            return true;
-        } else {  //No encontró "flag"
-            if (flag2=='') return false;
-            let pos2 = pars.indexOf(flag2);
-            if (pos2!=-1) {
-                pars.splice(pos2,1); //Elimina
-                return true;
-            } else {  //No encontró "flag" ni "flag2"
-                return false;
-            }
-        }
-    }
-    function get_par_val(pars, flag, flag2) {
-        /* Quita una bandera o parámetro, como "-f" o "--file=" del arreglo de parámetros
-        "pars". 
-        Si encuentra alguno de los parámetros, devuelve [true, <valor>], donde <valor> es
-        el valor que se encuentra despues de la bandera "flag" o "flag2"
-        Si no encuentra "flag" o "flag2", devuelve [false, ''].
-        Ejemplo: 
-            let [f_arc, name] = get_par_val(pars, '-f', '--file=');
-        */
-        for (let i = 1; i < pars.length; i++) {
-            let par_i = pars[i];
-            if (par_i.startsWith(flag)) {     //Encontró "flag"
-                if (par_i==flag) {    //Parámetro solo. El valor viene después.
-                    //El valor debe venir en el siguiente parámetro
-                    if (i+1 == pars.length) { //Estaba al final
-                        addError("option requires an argument -- '"+flag+"'");
-                        return [false, ''];
-                    }
-                    let value = pars[i+1];  //Toma siguiente parámetro
-                    pars.splice(i,1); //Elimina "flag"
-                    pars.splice(i,1); //Elimina valor
-                    return [true, value];
-                } else {    //El parámetro viene junto al valor
-                    let value = par_i.substring(flag.length);
-                    pars.splice(i,1); //Elimina "flag" y valor
-                    return [true, value];
-                }
-            } else {    //No encontró "flag"
-                if (flag2=='') continue;
-                if (par_i.startsWith(flag2)) {     //Encontró "flag2"
-                    if (par_i==flag2) {    //Parámetro solo. El valor viene después.
-                        //El valor debe venir en el siguiente parámetro
-                        if (i+1 == pars.length) { //Estaba al final
-                            addError("option requires an argument -- '"+flag2+"'");
-                            return [false, ''];
-                        }
-                        let value = pars[i+1];  //Toma siguiente parámetro
-                        pars.splice(i,1); //Elimina "flag"
-                        pars.splice(i,1); //Elimina valor
-                        return [true, value];
-                    } else {    //El parámetro viene junto al valor
-                        let value = par_i.substring(flag2.length);
-                        pars.splice(i,1); //Elimina "flag" y valor
-                        return [true, value];
-                    }
-                }
-            }
-        }
-        //No encontró "flag" ni "flag2"
-        return [false, ''];
-    }
-    function validate_params(pars, fnames, perms) {
-        /* Valida que los parámetros ingresados, en el arreglo "pars", estén en la lista
-        de parámetros permitidos "perms" y extrae los nombres que no son parámetros en 
-        "fnames". Si no se reconoce un parámetro, se genera un error.
-        Los parámetros se reconocen porque empiezan con "-"
-        */
-        for (let i = 1; i < pars.length; i++) { //No considera nombre del comando
-            let par = pars[i];  //Parámetro
-            if (par[0]=='-') {
-                par = par.slice(1);   //quita "-"
-                if (perms.includes(par)) {
-                    //verb = true; OK
-                } else {
-                    addError("invalid option -- '" + par + "'");
-                    return;
-                }
-            } else {
-                fnames.push(par);  //Agrega nombre
-            }
-       }
     }
     function mkdir(base_dir, dir_name) {
         /* Crea un nuevo directorio, en el directorio indicado (base_fil). Devuelve la 
@@ -361,7 +364,7 @@ function TitoShellEmul(response) {
         return new_dir;
     }
     function mkfile(base_dir, fil_name, mdate, content) {
-        /* Crea un nuevo directorio, en el directorio indicado (base_fil). Devuelve la 
+        /* Crea un nuevo archivo, en el directorio indicado (base_fil). Devuelve la 
         referencia al archivo "Cfile" creado. */
         //Verifica si existe ya el nombre.
         if (fil_name in base_dir.dir) {
@@ -371,6 +374,7 @@ function TitoShellEmul(response) {
         //Creamos el nuevo archivo
         let new_fil = new Cfile(fil_name, '-rwxr-xr-x', cur_user, cur_group, content.length, base_dir);
         new_fil.mdate = mdate;
+        new_fil.atime = mdate;
         new_fil.content = content;
         //Creamos la entrada del directorio
         base_dir.dir[fil_name] = new_fil;
@@ -594,6 +598,44 @@ function TitoShellEmul(response) {
             delete parent.dir[target.name];
         }
     }
+    function do_touch(pars) {
+        /* Actualiza la fecha de modificación de un archivo. */
+        //Lee Banderas y valida parámetros
+        let atime = get_param(pars, '-a');  //Tiempo de acceso.
+        let mtime = get_param(pars, '-m');  //Tiempo de modificación.
+        let nonew = get_param(pars, '-c','--no-create');  //Sin crear archivo nuevo
+        let fnames = [];    //Nombres de archivos (o carpetas) indicados.
+        validate_params(pars, fnames, []);
+        if (err!='') return;
+        if (fnames.length==0) {   
+            addError("missing operand");
+            return;
+        }
+        //Cambia la fecha de los archivos indicados
+        for (const filname of fnames) {
+            let abspath = expand_rel_path(cur_path, filname);
+            const [parent, dest_name] = get_parent_from(abspath, cur_dir);
+            if (err!='') return;    //La ruta está mal
+            let dest_file;
+            if ((dest_name in parent.dir)) {  //Existe el archivo o directorio
+                dest_file = parent.dir[dest_name];   //Puede ser diectorio.
+            } else {    //No existe, hay que crearlo
+                dest_file = mkfile(parent, dest_name, new Date(), "");
+            }
+            //Cambia fecha
+            if (!atime && !mtime) {   //Sin parámetros. Cambia fecha de acceso y modificacón
+                dest_file.adate  = new Date();   //Fecha-hora del último acceso
+                dest_file.mdate  = new Date();   //Fecha-hora de la última modificación
+            } else {
+                if (atime) {
+                    dest_file.adate  = new Date();   //Fecha-hora del último acceso
+                }
+                if (mtime) {
+                    dest_file.mdate  = new Date();   //Fecha-hora de la última modificación
+                }
+            }
+        }
+    }
     function do_ls(pars) {
         const SCR_WIDTH = 80;
         /**Hace un listado del directorio actual */
@@ -786,6 +828,7 @@ function TitoShellEmul(response) {
         response("rmdir [dir names] [-v]\n");
         response("pwd\n");
         response("whoami\n");
+        response("clear\n");
     }
     function create_user(name, pwd, group, home_path) {
         /* Crea un nuevo usuario. El parámetro "home_path" es el directorio "home" del
@@ -978,6 +1021,8 @@ function TitoShellEmul(response) {
             } else if (command=='pwd') {
                 if (cur_path=='') response("/\n"); 
                 else response(cur_path + "\n");
+            } else if (command=='clear') {
+                response("\x1B[H\x1B[2J\x1B[3J");
             } else if (command=='ls') {
                 do_ls(pars);
             } else if (command=='cd') {
@@ -992,6 +1037,8 @@ function TitoShellEmul(response) {
                 do_mkdir(pars);
             } else if (command=='rmdir') {
                 do_rmdir(pars);
+            } else if (command=='touch') {
+                do_touch(pars);
             } else if (command=='whoami') {
                 do_whoami(pars);
             } else if (command=='hostname') {
@@ -1023,12 +1070,18 @@ function TitoShellEmul(response) {
     }
     function writeCode(keycode) {
         /** Recibe un código de caracter */
-        let c = String.fromCharCode(keycode);
+        let c = String.fromCharCode(keycode);   //Obtiene el caracter
         if (escape_mode==0) {   //Modo normal
             //Verifica si es <Enter>
             if (keycode==10) {  //0X0A -> "\n"
                 response(c); //Genera el eco
                 processEnter();
+            } else if (keycode==3) {   //<Ctrl>+<C>
+                //Aquí se debería enviar la señal SIGINT al proceso actual 
+                curCommand = '';    //Cancela el comando actual
+                curXpos = 0;
+                response("^C\n");
+                sendPrompt();
             } else if (keycode==8) {   //Backspace
                 if (curXpos>0) {
                     //Elimina el caracter a la izquierda del comando
@@ -1057,7 +1110,7 @@ function TitoShellEmul(response) {
         /** Recibe un flujo de texto, por el canal Stdin */
         for (let i = 0; i < str.length; i++) {
             let keyCode = str.charCodeAt(i);
-            shell.writeCode(keyCode);
+            writeCode(keyCode);
         }
     }
     function init() {
@@ -1081,9 +1134,9 @@ function TitoShellEmul(response) {
         create_user('user', 'user', 'user', '');
         if (err!='') sendStderror('');
 
-        modeShell = SM_LOGIN;   //Modo de inicio de sesión
-        //create_user('usuario', 'user', 'user', '');
-        //login_user('usuario');
+//        modeShell = SM_LOGIN;   //Modo de inicio de sesión
+        create_user('usuario', 'user', 'user', '');
+        login_user('usuario');
 
         response("\x1B[0m");    //Restaura atributos
         response('Login: ');
