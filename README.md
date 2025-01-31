@@ -17,10 +17,12 @@ At the moment, only a few commands are implemented:
 * help
 * hostname
 * ls [files] [-a] [-d] [-l] [-t[r]] [-S[r]]
-* mkdir [dir names] [-v]
-* rmdir [dir names] [-v]
+* mkdir DIRECTORY [-v]
+* rmdir DIRECTORY [-v]
 * pwd
+* touch FILES [-a] [-m] [-c]
 * whoami
+* clear
 
 There is no support for redirects, pipes or permissions.
 
