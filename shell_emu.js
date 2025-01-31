@@ -620,6 +620,7 @@ function TitoShellEmul(response) {
             if ((dest_name in parent.dir)) {  //Existe el archivo o directorio
                 dest_file = parent.dir[dest_name];   //Puede ser diectorio.
             } else {    //No existe, hay que crearlo
+                if (!nonew) return;
                 dest_file = mkfile(parent, dest_name, new Date(), "");
             }
             //Cambia fecha
@@ -824,9 +825,10 @@ function TitoShellEmul(response) {
         response("help\n");
         response("hostname\n");
         response("ls [files] [-a] [-d] [-l] [-t[r]] [-S[r]]\n");
-        response("mkdir [dir names] [-v]\n");
-        response("rmdir [dir names] [-v]\n");
+        response("mkdir DIRECTORY [-v]\n");
+        response("rmdir DIRECTORY [-v]\n");
         response("pwd\n");
+        response("touch FILES [-a] [-m] [-c]\n");
         response("whoami\n");
         response("clear\n");
     }
@@ -937,6 +939,8 @@ function TitoShellEmul(response) {
                     if (hist_idx > ncomms) hist_idx = ncomms;
                     let last_comm = hist[ncomms - hist_idx];
                     curCommand = last_comm;
+                    response("\x1B[2K\x1B[0F");
+                    sendPrompt();
                     response(last_comm);
                 }
             } else if (escape_seq == "\x1B[B") {      //Direccional abajo
@@ -953,6 +957,8 @@ function TitoShellEmul(response) {
                             last_comm = hist[ncomms - hist_idx];
                         }
                         curCommand = last_comm;
+                        response("\x1B[2K\x1B[0F");
+                        sendPrompt();
                         response(last_comm);
                     }
                 }
@@ -1134,9 +1140,9 @@ function TitoShellEmul(response) {
         create_user('user', 'user', 'user', '');
         if (err!='') sendStderror('');
 
-//        modeShell = SM_LOGIN;   //Modo de inicio de sesión
-        create_user('usuario', 'user', 'user', '');
-        login_user('usuario');
+        modeShell = SM_LOGIN;   //Modo de inicio de sesión
+//        create_user('usuario', 'user', 'user', '');
+//        login_user('usuario');
 
         response("\x1B[0m");    //Restaura atributos
         response('Login: ');
